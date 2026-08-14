@@ -4,9 +4,18 @@ DeepSeek Harness（DSH）的 **3D 角色生成插件**：把一句需求 / 一�
 
 ## 安装
 
+**推荐从 npm registry 安装**（已发布、自带构建产物，唯一推荐方式）：
+
 ```bash
 dsh plugin --profile web add dsh-gen3d
 ```
+
+> **git 安装（不推荐，仅备用）**：`dsh plugin --profile web add github:LuZhouheng/dsh-gen3d`。
+> git 安装拉的是源码（`lib/` 不进 Git），包内已备自包含 `prepare` 脚本
+> （`tsc -p tsconfig.build.json`，跨平台、无 shell 依赖）在安装时自动构建；
+> 但 pnpm ≥10 默认拦截 git 依赖的构建脚本，还需按 DSH publish 文档在该 profile
+> 的 `pnpm-workspace.yaml` 中为 `dsh-gen3d` 声明 `allowBuilds` 构建许可后才生效。
+> 第三方插件目录站自动生成的 `github:` 安装命令即此路径——照抄前请知悉。
 
 ## 凭证配置
 

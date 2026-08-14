@@ -620,7 +620,7 @@ dsh --profile demo
 
 1. **hello-plugin（无依赖）**：按 `publish.md:33-62` 原样三文件（JS 版），`dsh plugin --profile dsh-api-verify add ./hello-plugin` 成功；`--dump-config` 出现 `# == dsh-hello-plugin` 层（行 314-316）；`dsh --profile dsh-api-verify` 启动并打印 `[hello-plugin] plugin loaded!`。
 2. **tool-demo（defineTool + credentials + pre-execute ask gate）**：index.js 注册 `gen3d_ping`（`enum` 参数 + object output + `ctx.credentials.resolve(credentialRef('MESHY_API_KEY'))`）+ `tools/pre-execute` ask gate；启动日志 `[tool-demo] registered gen3d_ping + pre-execute ask gate`——注册、服务注入（`inject: ['tools','credentials']`）、事件挂载全部通过。
-3. **陷阱（link 安装不解析依赖）**：`dsh plugin add ./目录`（pnpm `link:` 安装）时，插件包自身的 `dependencies` **不会**被 pnpm 解析安装，ESM import `@deepseek-ai/dsh-tools` 报 `ERR_MODULE_NOT_FOUND`；先 `npm pack` 再 `dsh plugin add ./xxx.tgz` 则依赖正确 hoist 到 profile `node_modules`（实测通过）。**分发必须用 tarball 或 registry，不要用目录链接。**
+3. **陷阱（link 安装不解析依赖）**：`dsh plugin add ./目录`（pnpm `link:` 安装）时，插件包自身的 `dependencies` **不会**被 pnpm 解析安装，ESM import `@deepseek-ai/dsh-tools` 报 `ERR_MODULE_NOT_FOUND`；先 `npm pack` 再 `dsh plugin add ./xxx.tgz` 则依赖正确 hoist 到 profile `node_modules`（实测通过）。**分发必须用 tarball 或 registry，不要用目录链接。**（2026-08-14 补充：`dsh-gen3d` 已随包提供自包含 `prepare` 脚本 `tsc -p tsconfig.build.json`，git 安装路径在 profile 侧配置 `allowBuilds` 后亦可用；registry 仍是唯一推荐分发方式。）
 4. 清理：`dsh plugin remove` + 删除测试 profile 目录。
 
 ---

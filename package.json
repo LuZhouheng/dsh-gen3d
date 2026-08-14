@@ -21,6 +21,7 @@
     "build": "rm -rf lib && tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "vitest run",
+    "prepare": "tsc -p tsconfig.build.json",
     "prepublishOnly": "pnpm run build && pnpm run test"
   },
   "dependencies": {
