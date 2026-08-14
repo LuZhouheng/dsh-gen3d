@@ -1,0 +1,52 @@
+{
+  "name": "dsh-gen3d",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 的 3D 角色生成插件：直连 Meshy / Hunyuan3D / Tripo3D / Rodin 官方 API，用户自配 key，未配置时回退确定性 mock。",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "license": "MIT",
+  "packageManager": "pnpm@11.21.0",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "skills"
+  ],
+  "scripts": {
+    "build": "rm -rf lib && tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm run build && pnpm run test"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-jobs": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@gltf-transform/core": "^4.4.2",
+    "@gltf-transform/extensions": "^4.4.2",
+    "@gltf-transform/functions": "^4.4.2",
+    "draco3dgltf": "^1.5.7"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "3d",
+    "character",
+    "meshy",
+    "hunyuan3d",
+    "tripo3d",
+    "rodin"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

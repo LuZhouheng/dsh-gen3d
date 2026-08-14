@@ -1,0 +1,10 @@
+node_modules/
+lib/
+dist/
+.env
+.env.*
+*.log
+.DS_Store
+assets/3d/
+.dsh-gen3d/
+*.tgz
