@@ -4,6 +4,10 @@
 > （下文记作 `<repo>`）为准，标注格式为 `路径:行号`。实测验证基于本机 npm
 > 全局 `dsh@0.1.0-rc.6` 与 registry 上的 `@deepseek-ai/dsh-tools@0.1.0-rc.6`
 > （见第 8 节）。
+>
+> 2026-08-20 追加：本机 npm 全局 `dsh@0.1.0-rc.8`，registry 上
+> `@deepseek-ai/dsh-tools / dsh-jobs / dsh-skill` 同为 `0.1.0-rc.8`，插件面 API
+> 无 breaking change；rc.6 实测记录保留为历史，见第 8 节新增条目 5。
 
 ---
 
@@ -622,6 +626,7 @@ dsh --profile demo
 2. **tool-demo（defineTool + credentials + pre-execute ask gate）**：index.js 注册 `gen3d_ping`（`enum` 参数 + object output + `ctx.credentials.resolve(credentialRef('MESHY_API_KEY'))`）+ `tools/pre-execute` ask gate；启动日志 `[tool-demo] registered gen3d_ping + pre-execute ask gate`——注册、服务注入（`inject: ['tools','credentials']`）、事件挂载全部通过。
 3. **陷阱（link 安装不解析依赖）**：`dsh plugin add ./目录`（pnpm `link:` 安装）时，插件包自身的 `dependencies` **不会**被 pnpm 解析安装，ESM import `@deepseek-ai/dsh-tools` 报 `ERR_MODULE_NOT_FOUND`；先 `npm pack` 再 `dsh plugin add ./xxx.tgz` 则依赖正确 hoist 到 profile `node_modules`（实测通过）。**分发必须用 tarball 或 registry，不要用目录链接。**（2026-08-14 补充：`dsh-gen3d` 已随包提供自包含 `prepare` 脚本 `tsc -p tsconfig.build.json`，git 安装路径在 profile 侧配置 `allowBuilds` 后亦可用；registry 仍是唯一推荐分发方式。）
 4. 清理：`dsh plugin remove` + 删除测试 profile 目录。
+5. **2026-08-20 对齐 rc.8**：本机 npm 全局 `dsh@0.1.0-rc.8`（`npm i -g @deepseek-ai/dsh@0.1.0-rc.8`，先经 `which dsh` / `npm ls -g --depth=0` 确认原为 rc.6）；`@deepseek-ai/cordis` npm 最新仍为 `4.0.1`，未改动。`dsh-gen3d` 三依赖（dsh-tools / dsh-jobs / dsh-skill）升 `0.1.0-rc.8` 后 `pnpm build` 通过、338 测试全绿，类型无漂移、无需代码适配；`pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 由 pnpm 自动并入 rc.8 条目。冒烟：`pnpm pack` → `dsh plugin --profile gen3d-smoke add ./dsh-gen3d-0.1.0.tgz` → `--dump-config` 出现 `# == dsh-gen3d` 层（行 314-316）→ 临时 headless profile（bundles 含 dsh-base + dsh-headless + dsh-gen3d）跑一次性提示词，实际调用 `gen3d_provider_status` / `gen3d_credentials_status`：四家供应商均 `configured: false`、`mode: mock`，回退确定性 mock 且零费用；全程无 `ERR_MODULE_NOT_FOUND` 类依赖问题。清理：`dsh plugin remove` + 删除测试 profile（gen3d-smoke 与临时 headless profile）+ 删除 tarball。
 
 ---
 
