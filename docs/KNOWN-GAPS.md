@@ -158,23 +158,22 @@ hunyuan3d 默认 5s / rodin 默认 5s）；HTTP 429 统一映射
 **后续计划**：轮询遇 429（及可识别限流响应）时按 `Retry-After`（若存在）或
 指数退避动态拉长下一次间隔，设上限封顶；四家统一实现。
 
-## 10. 设置卡片的浏览器渲染未在真实 DSH web 部署端到端验证
+## 10. ~~设置卡片的浏览器渲染未在真实 DSH web 部署端到端验证~~（✅ 已解决，2026-08-20）
 
-**现状**：0.1.1 新增设置卡片（host 半边 `src/settings.ts` + 浏览器半边
-`src/client/`，`tsdown.config.ts` 自复刻官方 clientBundle 输出格式）。已验证：
-bundle 产物格式与官方发布面逐字一致（`window.__ModuleLoader__.load({ id:
-"dsh-gen3d", factory: (require) => {...} })`，externals 仅平台模块 + runtime
-store 引擎）、host/client 两套 tsc + tsdown 全绿、数据面单测（schema 缺省引用
-与 `PROVIDER_ENV_KEYS` 一致性、控制器状态投影与写路径）通过。**未做**：把插件
-装进带 Web UI 的 DSH 部署，实际打开设置页确认卡片渲染与读写。
+**状态**：已在真实 rc.8 web 部署实测通过。本机 `dsh@0.1.0-rc.8`，临时 profile
+`gen3d-e2e`（bundles = `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app@0.1.0-rc.8`
++ `dsh-gen3d@0.1.1` tarball），`dsh --profile gen3d-e2e --no-open --port 0` 起服务后
+用 playwright 打开设置页。
 
-**影响**：卡片依赖官方 keyed 槽 `settings.plugin.item` 与 `ctx.settingsScope`
-服务（rc.7+ 发布面），且浏览器半边 bundle 格式是自复刻预设——未在真实浏览器
-跑通前，这两处仍有理论偏差风险；host 半边与工具密钥接线（`providerEnvKeyOf`）
-不依赖 Web 面，headless 部署不受影响。
+**证据**：
+- 设置 → 插件配置页出现「3D 生成供应商配置」卡片（位于终端 / Agent 循环 /
+  网页搜索卡片之后——keyed 槽 `settings.plugin.item`（key=gen3d）与 serve 集合配对生效）；
+- 四行供应商（Meshy / Hunyuan3D / Tripo3D / Rodin）在无 key 环境全部显示
+  `mock`/未配置态，缺省引用即 `PROVIDER_ENV_KEYS`；TC3 口径与凭证域口径双注脚可见；
+- 写路径往返通过：Meshy 引用临时改 `GEN3D_E2E_TEMP` → 保存 → 输入框更新 +
+  「已覆盖」徽标 + 保持 mock（未知引用=未配置）→ 清除 → 恢复 `MESHY_API_KEY`；
+- `/plugins/dsh-gen3d/client.js` 路由 200，boot manifest 含 dsh-gen3d 条目；
+  浏览器 console 零错误零告警。
 
-**规避**：先用 `pnpm pack` + `dsh plugin add` 装进带 web 的 profile，打开
-设置 → 插件配置页核对四行状态与引用读写；凭证状态以 `credentials.describe`
-口径为准（Hunyuan3D TC3 路径不在凭证域，卡片只反映 `HUNYUAN3D_API_KEY`）。
-
-**后续计划**：在真实 DSH web 部署完成冒烟后删除本条目。
+**清理**：停 web 服务、删除 `gen3d-e2e` profile 目录、删 tarball 与日志；
+共享设置文档无残留（`gen3d: {}`）。截图存证在 /tmp（不入仓库）。

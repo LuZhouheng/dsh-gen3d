@@ -161,6 +161,10 @@ rc.7 起支持的插件自注册设置卡片，见 [docs/dsh-api.md](docs/dsh-ap
 - 说明：Hunyuan3D 的 TC3 密钥对路径不经过凭证域，卡片只反映
   `HUNYUAN3D_API_KEY`（TokenHub）路径状态。
 
+> 实测：2026-08-20 在 rc.8 web 部署（dsh-web-app@0.1.0-rc.8）端到端验证通过——
+> 插件配置页渲染四行供应商状态、写路径往返正常、浏览器 console 零错误
+> （证据见 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) §10）。
+
 ## 布局
 
 ```
