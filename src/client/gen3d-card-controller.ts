@@ -44,8 +44,8 @@ const PROVIDER_DISPLAY: Record<Gen3dProviderId, string> = {
   rodin: 'Rodin（Hyper3D）',
 };
 
-/** 供应商 → 节内字段名（= host 半边 PROVIDER_SETTING_KEYS 同串）。 */
-const SETTING_KEY: Record<Gen3dProviderId, keyof Gen3dSection> = {
+/** 供应商 → 节内字段名（= host 半边 PROVIDER_SETTING_KEYS 同串；一致性由单测钉死）。 */
+export const CLIENT_SETTING_KEYS: Record<Gen3dProviderId, keyof Gen3dSection> = {
   meshy: 'meshyApiKeyEnv',
   hunyuan3d: 'hunyuan3dApiKeyEnv',
   tripo3d: 'tripo3dApiKeyEnv',
@@ -113,7 +113,7 @@ export class Gen3dCardController {
   ): Gen3dCardState {
     const section = snap.value;
     const providers: ProviderCardRow[] = PROVIDER_IDS.map((id) => {
-      const apiKeyEnv = section === undefined ? '' : (section[SETTING_KEY[id]] ?? '');
+      const apiKeyEnv = section === undefined ? '' : (section[CLIENT_SETTING_KEYS[id]] ?? '');
       const info = credential[apiKeyEnv];
       const configured = info?.configured ?? false;
       return {
@@ -123,52 +123,70 @@ export class Gen3dCardController {
         configured,
         writable: info?.writable ?? true,
         mode: configured ? 'real' : 'mock',
-        overridden: isFieldOverridden(snap, SETTING_KEY[id]),
+        overridden: isFieldOverridden(snap, CLIENT_SETTING_KEYS[id]),
       };
     });
     return { status: snap.status, writable: snap.writable, providers };
   }
 
-  /** 重读设置节 + 凭证域并发布新快照（凭证域不可达时保持 last-good，卡片仍可用）。 */
+  /** 当前节的生效引用集合（去重、去空，顺序无关比较）。 */
+  private sectionRefs(snap: SettingsScopeSnapshot<Gen3dSection>): string[] {
+    const refs = PROVIDER_IDS
+      .map((id) => (snap.value === undefined ? '' : (snap.value[CLIENT_SETTING_KEYS[id]] ?? '')))
+      .filter((ref) => ref !== '');
+    return [...new Set(refs)];
+  }
+
+  /**
+   * 重读设置节 + 凭证域并发布新快照。
+   *
+   * 乱序守卫（仿官方 WebSearchCard.readCredential 的 ref 绑定）：describe 请求
+   * 携带发起时的引用集合，响应回来后先校验「当前生效引用 == 本次所问引用」，
+   * 不一致（期间节被改写/新一轮 refresh 已接管）则整体丢弃，由后续 refresh
+   * 发布新状态；发布时也重读一次当前快照，避免旧节内容带新凭证状态覆盖卡片。
+   * 凭证 RPC 失败 / 非 ok 时保留 last-good 快照，卡片仍可用。
+   */
   async refresh(): Promise<void> {
     const snap = this.scope.getSnapshot();
     if (snap.status !== 'ready' || snap.value === undefined) {
       this.store.set(this.project(snap, {}));
       return;
     }
-    const refs = PROVIDER_IDS.map((id) => snap.value![SETTING_KEY[id]] ?? '').filter((ref) => ref !== '');
-    const unique = [...new Set(refs)];
-    const credential: Record<string, CredentialInfo> = {};
-    if (unique.length > 0) {
-      try {
-        const response = await this.api.credentials.describe({ refs: unique });
-        if (response.result.ok) {
-          for (const ref of unique) {
-            const view = response.result.value.credentials[ref];
-            // 未知但合法的引用按未配置处理，且视为可写（由 Host 裁决写入）。
-            credential[ref] = view === undefined
-              ? { configured: false, writable: true }
-              : { configured: view.configured, writable: view.writable };
-          }
-        }
-      } catch (_credentialReadFailure) {
-        // 凭证 RPC 失败：不发布半截状态，保留 last-good 快照。
-        return;
-      }
+    const refs = this.sectionRefs(snap);
+    if (refs.length === 0) {
+      this.store.set(this.project(snap, {}));
+      return;
     }
-    this.store.set(this.project(snap, credential));
+    let credential: Record<string, CredentialInfo>;
+    try {
+      const response = await this.api.credentials.describe({ refs });
+      if (!response.result.ok) return;
+      credential = {};
+      for (const ref of refs) {
+        const view = response.result.value.credentials[ref];
+        // 未知但合法的引用按未配置处理，且视为可写（由 Host 裁决写入）。
+        credential[ref] = view === undefined
+          ? { configured: false, writable: true }
+          : { configured: view.configured, writable: view.writable };
+      }
+    } catch (_credentialReadFailure) {
+      return;
+    }
+    const current = this.scope.getSnapshot();
+    if (!sameRefs(this.sectionRefs(current), refs)) return; // 过期响应：丢弃
+    this.store.set(this.project(current, credential));
   }
 
   /** 写一个引用到 user 层（空串视作清除）。 */
   async setRef(providerId: Gen3dProviderId, ref: string): Promise<void> {
     if (ref.trim() === '') return this.clearRef(providerId);
-    await this.scope.set(SETTING_KEY[providerId], ref.trim());
+    await this.scope.set(CLIENT_SETTING_KEYS[providerId], ref.trim());
     await this.refresh();
   }
 
   /** 清除引用（回到 schema 缺省 = PROVIDER_ENV_KEYS 对应变量名）。 */
   async clearRef(providerId: Gen3dProviderId): Promise<void> {
-    await this.scope.unset(SETTING_KEY[providerId]);
+    await this.scope.unset(CLIENT_SETTING_KEYS[providerId]);
     await this.refresh();
   }
 
@@ -189,4 +207,11 @@ function isFieldOverridden(
 ): boolean {
   const user = snap.user;
   return typeof user === 'object' && user !== null && Object.prototype.hasOwnProperty.call(user, field);
+}
+
+/** 两引用集合是否一致（顺序无关）。 */
+function sameRefs(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  return b.every((ref) => set.has(ref));
 }

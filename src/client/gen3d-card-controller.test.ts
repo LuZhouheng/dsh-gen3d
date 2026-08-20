@@ -8,7 +8,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-runtime/client';
 
-import { Gen3dCardController } from './gen3d-card-controller.js';
+import { GEN3D_SETTINGS_NAMESPACE, PROVIDER_SETTING_KEYS } from '../settings.js';
+import {
+  CLIENT_SETTING_KEYS,
+  GEN3D_CARD_KEY,
+  Gen3dCardController,
+} from './gen3d-card-controller.js';
 
 vi.mock('@deepseek-ai/dsh-client-runtime/client', () => ({
   createSnapshotStore<T>(init: T) {
@@ -37,9 +42,10 @@ interface Section {
   rodinApiKeyEnv?: string;
 }
 
-/** 记录写路径的假 scope：set/unset 同步更新快照并广播。 */
+/** 记录写路径的假 scope：set/unset 同步更新快照并广播；updateSnap 供测试直接改写。 */
 function makeScope(init: SettingsScopeSnapshot<Section>): SettingsScope<Section> & {
   writes: { op: 'set' | 'unset'; field: string; value?: unknown }[];
+  updateSnap(next: SettingsScopeSnapshot<Section>): void;
 } {
   let snap = init;
   const listeners = new Set<() => void>();
@@ -51,6 +57,10 @@ function makeScope(init: SettingsScopeSnapshot<Section>): SettingsScope<Section>
     subscribe: (fn: () => void) => {
       listeners.add(fn);
       return () => { listeners.delete(fn) };
+    },
+    updateSnap: (next: SettingsScopeSnapshot<Section>) => {
+      snap = next;
+      emit();
     },
     set: async (field: string, value: unknown) => {
       writes.push({ op: 'set', field, value });
@@ -71,11 +81,11 @@ function makeScope(init: SettingsScopeSnapshot<Section>): SettingsScope<Section>
       snap = { ...snap, status: 'ready', value: next, user };
       emit();
     },
-  } as unknown as SettingsScope<Section> & { writes: typeof writes };
+  } as unknown as SettingsScope<Section> & { writes: typeof writes; updateSnap: (next: SettingsScopeSnapshot<Section>) => void };
   return scope;
 }
 
-/** 假凭证域 wire 面。 */
+/** 假凭证域 wire 面（立即完成）。 */
 function makeApi(views: Record<string, { configured?: boolean; writable?: boolean } | undefined>) {
   return {
     credentials: {
@@ -88,6 +98,35 @@ function makeApi(views: Record<string, { configured?: boolean; writable?: boolea
             : { configured: view.configured ?? false, writable: view.writable ?? true };
         }
         return { result: { ok: true as const, value: { credentials } } };
+      }),
+    },
+  };
+}
+
+/** describe 成功响应形状（与 wire 面 CredentialView 结构兼容）。 */
+interface CredentialDescribeResponse {
+  result: {
+    ok: true;
+    value: { credentials: Record<string, { configured: boolean; writable: boolean }> };
+  };
+}
+
+/** 可控完成顺序的假凭证域：每次 describe 挂起一个 deferred，由测试按序 resolve。 */
+interface DeferredDescribe {
+  promise: Promise<CredentialDescribeResponse>;
+  resolve(value: CredentialDescribeResponse): void;
+}
+
+function makeDeferredApi() {
+  const calls: DeferredDescribe[] = [];
+  return {
+    calls,
+    credentials: {
+      describe: vi.fn((_req: { refs: string[] }) => {
+        let resolve!: (value: CredentialDescribeResponse) => void;
+        const promise = new Promise<CredentialDescribeResponse>((res) => { resolve = res });
+        calls.push({ promise, resolve });
+        return promise;
       }),
     },
   };
@@ -174,5 +213,51 @@ describe('Gen3dCardController 写路径', () => {
     await card.clearRef('hunyuan3d');
     await flush();
     expect(scope.writes.at(-1)).toEqual({ op: 'unset', field: 'hunyuan3dApiKeyEnv' });
+  });
+});
+
+describe('Gen3dCardController 乱序响应守卫', () => {
+  it('旧引用集合的过期 describe 晚到被丢弃，不覆盖新状态', async () => {
+    const scope = makeScope(readySnap());
+    const api = makeDeferredApi();
+    const card = new Gen3dCardController(scope as unknown as SettingsScope<Section>, api);
+    // 构造即发起 describe#1（默认四引用），pending
+    expect(api.calls).toHaveLength(1);
+    expect(api.credentials.describe).toHaveBeenCalledWith({
+      refs: ['MESHY_API_KEY', 'HUNYUAN3D_API_KEY', 'TRIPO3D_API_KEY', 'RODIN_API_KEY'],
+    });
+
+    // 响应期间节被改写（meshy 改引 MESH_KEY）→ subscribe 触发 describe#2
+    scope.updateSnap(readySnap({
+      value: { ...readySnap().value, meshyApiKeyEnv: 'MESH_KEY' },
+      user: { meshyApiKeyEnv: 'MESH_KEY' },
+    }));
+    await flush();
+    expect(api.calls).toHaveLength(2);
+    expect(api.credentials.describe).toHaveBeenLastCalledWith({
+      refs: ['MESH_KEY', 'HUNYUAN3D_API_KEY', 'TRIPO3D_API_KEY', 'RODIN_API_KEY'],
+    });
+
+    // 新响应先回：MESH_KEY 已配置 → real
+    api.calls[1]!.resolve({ result: { ok: true, value: { credentials: { MESH_KEY: { configured: true, writable: true } } } } });
+    await flush();
+    let meshy = card.inject().hooks.gen3dCard.getSnapshot().providers.find((p) => p.providerId === 'meshy')!;
+    expect(meshy).toMatchObject({ apiKeyEnv: 'MESH_KEY', mode: 'real', configured: true });
+
+    // 旧响应（默认四引用、未配置）晚到：守卫应丢弃，不把卡片打回 mock
+    api.calls[0]!.resolve({ result: { ok: true, value: { credentials: { MESHY_API_KEY: { configured: false, writable: true } } } } });
+    await flush();
+    meshy = card.inject().hooks.gen3dCard.getSnapshot().providers.find((p) => p.providerId === 'meshy')!;
+    expect(meshy).toMatchObject({ apiKeyEnv: 'MESH_KEY', mode: 'real', configured: true });
+  });
+});
+
+describe('跨侧一致性（host ↔ client 钉死）', () => {
+  it('client 命名空间与 host GEN3D_SETTINGS_NAMESPACE 同串', () => {
+    expect(GEN3D_CARD_KEY).toBe(GEN3D_SETTINGS_NAMESPACE);
+  });
+
+  it('client 字段名与 host PROVIDER_SETTING_KEYS 一一对应', () => {
+    expect(CLIENT_SETTING_KEYS).toEqual(PROVIDER_SETTING_KEYS);
   });
 });

@@ -105,8 +105,12 @@ export function Gen3dCard(props: Gen3dCardProps) {
         ? <p style={styles.description}>加载中…</p>
         : rows}
       <p style={styles.footnote}>
-        注：Hunyuan3D 的 TC3 密钥对（HUNYUAN3D_SECRET_ID + HUNYUAN3D_SECRET_KEY，腾讯云 API 3.0 后处理路径）
+        注 1：Hunyuan3D 的 TC3 密钥对（HUNYUAN3D_SECRET_ID + HUNYUAN3D_SECRET_KEY，腾讯云 API 3.0 后处理路径）
         不经过凭证域，本卡片只反映 HUNYUAN3D_API_KEY（TokenHub）路径的配置状态；TC3 路径由工具在主机侧读取。
+        <br />
+        注 2：卡片的 configured 状态来自凭证域（credentials describe，覆盖环境变量与
+        $DSH_HOME/.credentials.yaml 层）；直接写在调用目录 &lt;cwd&gt;/.env 的 key 不在凭证域内，卡片不反映，
+        工具侧状态以 gen3d_provider_status 工具口径为准。
       </p>
     </div>
   );
