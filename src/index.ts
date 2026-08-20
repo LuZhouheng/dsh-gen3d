@@ -37,6 +37,7 @@ import {
 
 import { isProviderConfigured, readHunyuanSecretId, readHunyuanSecretKey } from './config.js';
 import type { ProviderId } from './providers/types.js';
+import { installGen3dSettingsSection } from './settings.js';
 import { allGen3dTools, billingToolNames } from './tools/index.js';
 import type { ContentBlock, Gen3dToolDefinition, ParameterSchemaSpec, ValueSchemaSpec } from './tools/common.js';
 import { getStore } from './tools/common.js';
@@ -375,11 +376,15 @@ export const gen3dSkillProvider: SkillProvider = {
 
 // ── 插件装配 ─────────────────────────────────────────────────────────────────
 
-/** 装配：注册 19 个工具 + 计费审批 gate + 随包 skill provider。 */
+/** 装配：注册 19 个工具 + 计费审批 gate + 随包 skill provider + 设置卡片 host 半边。 */
 export function apply(ctx: Context): void {
   for (const def of allGen3dTools) {
     ctx.tools.register(toToolDefinition(def, ctx));
   }
   ctx.on('tools/pre-execute', billingGate);
   ctx.skills.registerProvider(() => gen3dSkillProvider);
+  // 设置卡片 host 半边：注册 gen3d 命名空间（浏览器卡片同 key 配对），并把
+  // 解析后的 apiKeyEnv 引用接给 config.ts 工具密钥解析（settings 服务缺席时
+  // 整体不生效，密钥解析回退 PROVIDER_ENV_KEYS 缺省）。
+  installGen3dSettingsSection(ctx);
 }

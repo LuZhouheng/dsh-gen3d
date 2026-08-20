@@ -19,6 +19,7 @@ import type { SkillCandidate, SkillProvider } from '@deepseek-ai/dsh-skill';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { apply, inject, name } from './index.js';
+import { providerEnvKeyOf } from './config.js';
 import { allGen3dTools, billingToolNames } from './tools/index.js';
 import { configureToolDeps } from './tools/common.js';
 import { FakeProvider, glbBytes, makeStore } from './tools/test-helpers.js';
@@ -30,9 +31,20 @@ interface MockContext {
   preExecute: ((exec: ToolExecution, next: () => Promise<PreToolDecision>) => Promise<PreToolDecision>)[];
   jobStarts: { spec: JobStart; id: string }[];
   skillProviders: SkillProvider[];
+  settingsRegistrations: { ns: unknown; schema: unknown; base: unknown }[];
   tools: { register: (def: ToolDefinition) => () => void };
   jobs: { start: (spec: JobStart) => string };
   skills: { registerProvider: (create: () => SkillProvider) => () => void };
+  settings: {
+    register: (ns: unknown, schema: unknown, options?: { base?: unknown }) => {
+      get: () => object;
+      watch: () => () => void;
+      update: () => Promise<void>;
+      replace: () => Promise<void>;
+    };
+  };
+  inject: (services: string[], callback: (ctx: MockContext) => unknown) => unknown;
+  effect: (callback: () => void | (() => void)) => void;
   on: (event: string, listener: (...args: unknown[]) => unknown) => () => void;
 }
 
@@ -42,6 +54,7 @@ function makeMockCtx(): MockContext {
     preExecute: [],
     jobStarts: [],
     skillProviders: [],
+    settingsRegistrations: [],
   } as unknown as MockContext;
   m.tools = {
     register: (def) => {
@@ -62,6 +75,21 @@ function makeMockCtx(): MockContext {
       return () => undefined;
     },
   };
+  // settings 服务最小面：记录命名空间注册，scope 只读返回空节（引用源随之
+  // 全 undefined → providerEnvKeyOf 回退缺省，不污染其他用例）。
+  m.settings = {
+    register: (ns, schema, options) => {
+      m.settingsRegistrations.push({ ns, schema, base: options?.base });
+      return {
+        get: () => ({}),
+        watch: () => () => undefined,
+        update: async () => {},
+        replace: async () => {},
+      };
+    },
+  };
+  m.inject = (_services, callback) => callback(m);
+  m.effect = () => undefined;
   m.on = (event, listener) => {
     if (event === 'tools/pre-execute') m.preExecute.push(listener as MockContext['preExecute'][number]);
     return () => undefined;
@@ -388,5 +416,21 @@ describe('随包 skill provider', () => {
     expect(def!.name).toBe('generate-3d-character');
     expect(def!.content).toContain('# Generate a 3D Character');
     expect(def!.content).toContain('## Procedure');
+  });
+});
+
+describe('设置卡片 host 半边', () => {
+  it('apply 注册 gen3d 命名空间，composition base 为空（缺省引用由 schema 承担）', () => {
+    const ctx = appliedCtx();
+    expect(ctx.settingsRegistrations).toHaveLength(1);
+    const registration = ctx.settingsRegistrations[0]!;
+    expect(registration.ns).toBe('gen3d');
+    expect(registration.base).toEqual({});
+  });
+
+  it('装配后 providerEnvKeyOf 回退 PROVIDER_ENV_KEYS 缺省（空节 + settings 服务缺失都安全）', () => {
+    appliedCtx();
+    // mock scope.get() 返回空节 → 引用源全 undefined → 回退缺省（见 settings.test.ts）。
+    expect(providerEnvKeyOf('meshy')).toBe('MESHY_API_KEY');
   });
 });

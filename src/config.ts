@@ -191,15 +191,44 @@ function readKeyByName(envName: string, options: ConfigOptions = {}): string | u
   return loadCredentialLayers(options)[envName];
 }
 
+// 设置节引用接线 ─────────────────────────────────────────────────────────────
+
+/**
+ * 设置节引用表：src/settings.ts 注册 gen3d 命名空间后，把解析出的
+ * apiKeyEnv 引用经 setProviderRefSource() 注入这里；工具密钥解析（本文件
+ * readProviderKey 及下游）据此换读对应变量名。未注入（无 settings 服务或
+ * 尚未装配）时回退 PROVIDER_ENV_KEYS 缺省，行为与既往完全一致。
+ */
+export interface ProviderRefs {
+  meshy?: string;
+  hunyuan3d?: string;
+  tripo3d?: string;
+  rodin?: string;
+}
+
+let providerRefSource: (() => ProviderRefs) | undefined;
+
+/** 注入/清除设置节引用源（settings.ts 的 setSource 钩子调用；测试可注入隔离）。 */
+export function setProviderRefSource(source: (() => ProviderRefs) | undefined): void {
+  providerRefSource = source;
+}
+
+/** 某供应商当前生效的凭证变量名：设置节引用非空时用它，否则 PROVIDER_ENV_KEYS 缺省。 */
+export function providerEnvKeyOf(id: ProviderId): string {
+  const ref = providerRefSource?.()[id];
+  return typeof ref === 'string' && ref.trim() !== '' ? ref : PROVIDER_ENV_KEYS[id];
+}
+
 // ── 对外 API ────────────────────────────────────────────────────────────────
 
 /**
  * 读取某供应商的官方 API key（四层优先级：env > $DSH_HOME/.credentials.yaml
  * > <cwd>/.env > $DSH_HOME/.env）。未配置返回 undefined —— provider 实现
  * 不得直接读 process.env，一律经本函数。
+ * 变量名取 providerEnvKeyOf(id)：设置卡片改写的 apiKeyEnv 引用优先生效。
  */
 export function readProviderKey(id: ProviderId, options: ConfigOptions = {}): string | undefined {
-  return readKeyByName(PROVIDER_ENV_KEYS[id], options);
+  return readKeyByName(providerEnvKeyOf(id), options);
 }
 
 /** 供应商凭证是否已配置（未配置时上层回退确定性 mock）。 */

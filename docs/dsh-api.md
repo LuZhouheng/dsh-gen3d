@@ -639,3 +639,45 @@ dsh --profile demo
 5. 长任务（Meshy 两阶段精修等）：`ctx.jobs.start({ kind: 'gen3d', owner: exec.agent, ... })` + `declare module '@deepseek-ai/dsh-jobs'` 扩展 `JobKindMap`（无 `./types` 子路径，见 5.2 节）；返回 `{ kind: 'background', jobId }` 结构句柄。
 6. skill：包内 `skills/generate-3d-character/SKILL.md`（kebab-case 名 + name/description frontmatter），在 `apply` 里用 `ctx.skills.registerProvider()` 自注册随包 provider（第 6.3 节方式 2，`import.meta.url` 只在插件模块内合法，patch 的 `!!js` 求值环境没有它）。
 7. 工具卡片：`presentCall` 用 `generic` 卡片 + `locations`（写出的 GLB 路径）；`presentResult` 用 `generic`（附结果摘要）或 `diff`（生成的 playable.json）。
+
+## 10. 设置卡片（插件自注册 settings card，rc.7+）
+
+> 依据：官方 `docs/cookbook/adding-a-settings-card.md`（rc.7 起，rc.8 未改）与
+> PR deepseek-harness#2404（`feat/plugin-owned-settings-surface`）。rc.7 把
+> `settings.plugin.item` 从 list 槽改为 **keyed 槽**，并删除 api-proxy 的
+> 硬编码命名空间白名单（rc.6 的 `settings-not-exposed`）——这是 out-of-tree
+> 插件卡片可用的前提。
+
+### 10.1 两条半边
+
+- **host 半边**（包根 `src/`）：`@deepseek-ai/dsh-settings` 的
+  `installSettingsSection(ctx, ns, schema, entry, hooks)` 注册命名空间
+  （`settingsNamespace('xxx')` 品牌化，必须 lowercase kebab）；schema 是
+  `@deepseek-ai/schemastery` 的 `z.object`（缺省用 `.default()` 静态值）。
+  解析层序：schema 默认值 → composition `base` → user 层；`user` 字段
+  **存在**即覆盖。`inject: ['settings']`，settings 服务缺席时整体不生效。
+- **浏览器半边**（`src/client/`，`dsh.client` 双面包的 client 面）：
+  `inject = ['slots', 'connection', 'settingsScope']`，`apply` 里
+  `ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({ name:
+  'settings.plugin.item', key: <命名空间>, inject: () => controller.inject() },
+  Card))`；key = host 命名空间即 join key。`ctx.settingsScope.bind({ namespace })`
+  → `SettingsScope<T>`（`getSnapshot/subscribe/set(field)/unset(field)`，
+  **set 只写节内顶层字段**，嵌套路径不可用）；configured/writable 事实经
+  `connection.api.credentials.describe({refs})`（永不含值）。组件自绘 chrome，
+  官方 `PluginCard`/表单不可值导入（bundle 纯度门）。
+
+### 10.2 打包与构建（out-of-tree 自复刻要点）
+
+- `package.json`：`exports["./client"]` → 浏览器 bundle；`dsh.client =
+  { platform: 'web', inject: [提供注入服务的包名…] }`。client-modules 按
+  loader 条目扫描 `require.resolve('<pkg>/package.json')`（baseUrl = cordis.yml
+  所在目录），服务 `/plugins/<pkg>/client.js`，无需重编 web 应用。
+- 官方 `tsdown` 的 `clientBundle` 预设**未发布**，需自复刻输出格式（本仓库
+  `tsdown.config.ts`）：CJS + browser，`format: 'cjs'`，externals = 平台模块表
+  （`react` 系列 + `@deepseek-ai/cordis` + `dsh-client-ui-slots` + `dsh-client-ui-primitives`）
+  + `@deepseek-ai/dsh-client-runtime/client`（rc.8 预载项），`noExternal` 其余全内联；
+  `outputOptions`：`entryFileNames: 'client.js'`、banner `window.__ModuleLoader__.load({
+  id: "<包名>", factory: (require) => {`、intro `var module = { exports: {} }; var
+  exports = module.exports;`、footer `return module.exports; } });`；同时自复刻
+  bundle 纯度门（平台模块外的一切 `@deepseek-ai/*` 值导入报错；type-only 导入已擦除）。
+- rc.8 另新增 `dsh.client.external`（模块图边）；rc.7 部署别声明该字段。

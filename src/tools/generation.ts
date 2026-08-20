@@ -11,7 +11,7 @@
 
 import { readFile } from 'node:fs/promises';
 
-import { PROVIDER_ENV_KEYS, isProviderConfigured, redactKey } from '../config.js';
+import { isProviderConfigured, providerEnvKeyOf, redactKey } from '../config.js';
 import { QUALITY_RUBRIC, clampTargetPolycount, makeCacheKey } from '../legacy/shared/catalog.js';
 import type { AssetSlot, GenerationMode } from '../legacy/shared/manifest.js';
 import { DEFAULT_WEIGHTS, weightedTotal } from '../legacy/shared/quality/heuristics.js';
@@ -316,11 +316,12 @@ export const gen3dCredentialsStatus = defineGen3dTool({
   output: { schema: resultSchema({}) },
   async run() {
     const providers = PROVIDERS.map((id) => {
-      const key = process.env[PROVIDER_ENV_KEYS[id]];
+      const envName = providerEnvKeyOf(id);
+      const key = process.env[envName];
       const configured = isProviderConfigured(id);
       return {
         providerId: id,
-        envName: PROVIDER_ENV_KEYS[id],
+        envName,
         configured,
         source: configured ? (key && key.trim() !== '' ? 'env' : 'file') : null,
         ...(configured ? { keyMasked: redactKey(key ?? '') } : {}),

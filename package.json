@@ -1,15 +1,35 @@
 {
   "name": "dsh-gen3d",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness 的 3D 角色生成插件：直连 Meshy / Hunyuan3D / Tripo3D / Rodin 官方 API，用户自配 key，未配置时回退确定性 mock。",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "license": "MIT",
   "packageManager": "pnpm@11.21.0",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
     }
   },
   "files": [
@@ -18,17 +38,19 @@
     "skills"
   ],
   "scripts": {
-    "build": "rm -rf lib && tsc -p tsconfig.build.json",
+    "build": "rm -rf lib && tsc -p tsconfig.build.json && tsc -p tsconfig.client.json && tsdown",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "vitest run",
-    "prepare": "tsc -p tsconfig.build.json",
+    "prepare": "pnpm run build",
     "prepublishOnly": "pnpm run build && pnpm run test"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-jobs": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-settings": "0.1.0-rc.8",
     "@deepseek-ai/dsh-skill": "0.1.0-rc.8",
     "@deepseek-ai/dsh-tools": "0.1.0-rc.8",
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@gltf-transform/core": "^4.4.2",
     "@gltf-transform/extensions": "^4.4.2",
     "@gltf-transform/functions": "^4.4.2",
@@ -46,7 +68,14 @@
     "rodin"
   ],
   "devDependencies": {
+    "@deepseek-ai/dsh-client-connection": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-settings-plugins": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.8",
     "@types/node": "^22.20.1",
+    "@types/react": "~18.3.31",
+    "tsdown": "^0.22.14",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }

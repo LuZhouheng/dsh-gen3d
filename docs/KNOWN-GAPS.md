@@ -1,6 +1,6 @@
 # 已知能力缺口（dsh-gen3d）
 
-> 状态：🟡 快照（2026-08-14，与 `src/` 代码现状对齐）。本文件逐条记录当前实现的
+> 状态：🟡 快照（2026-08-20，与 `src/` 代码现状对齐）。本文件逐条记录当前实现的
 > 已知能力缺口：**影响**（用户/链路会看到什么）、**规避方式**（当前可行路径）、
 > **后续计划**（补齐方向）。凡标注「待补」的条目，补齐后须同步删除或改写对应
 > 小节，并把状态翻绿。
@@ -157,3 +157,24 @@ hunyuan3d 默认 5s / rodin 默认 5s）；HTTP 429 统一映射
 
 **后续计划**：轮询遇 429（及可识别限流响应）时按 `Retry-After`（若存在）或
 指数退避动态拉长下一次间隔，设上限封顶；四家统一实现。
+
+## 10. 设置卡片的浏览器渲染未在真实 DSH web 部署端到端验证
+
+**现状**：0.1.1 新增设置卡片（host 半边 `src/settings.ts` + 浏览器半边
+`src/client/`，`tsdown.config.ts` 自复刻官方 clientBundle 输出格式）。已验证：
+bundle 产物格式与官方发布面逐字一致（`window.__ModuleLoader__.load({ id:
+"dsh-gen3d", factory: (require) => {...} })`，externals 仅平台模块 + runtime
+store 引擎）、host/client 两套 tsc + tsdown 全绿、数据面单测（schema 缺省引用
+与 `PROVIDER_ENV_KEYS` 一致性、控制器状态投影与写路径）通过。**未做**：把插件
+装进带 Web UI 的 DSH 部署，实际打开设置页确认卡片渲染与读写。
+
+**影响**：卡片依赖官方 keyed 槽 `settings.plugin.item` 与 `ctx.settingsScope`
+服务（rc.7+ 发布面），且浏览器半边 bundle 格式是自复刻预设——未在真实浏览器
+跑通前，这两处仍有理论偏差风险；host 半边与工具密钥接线（`providerEnvKeyOf`）
+不依赖 Web 面，headless 部署不受影响。
+
+**规避**：先用 `pnpm pack` + `dsh plugin add` 装进带 web 的 profile，打开
+设置 → 插件配置页核对四行状态与引用读写；凭证状态以 `credentials.describe`
+口径为准（Hunyuan3D TC3 路径不在凭证域，卡片只反映 `HUNYUAN3D_API_KEY`）。
+
+**后续计划**：在真实 DSH web 部署完成冒烟后删除本条目。

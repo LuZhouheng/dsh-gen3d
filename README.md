@@ -140,20 +140,41 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 
 ```bash
 pnpm install
-pnpm build     # tsc -p tsconfig.json → lib/
+pnpm build     # tsc host + tsc client + tsdown → lib/（含浏览器半边 lib/client.js）
 pnpm test      # vitest run
 ```
+
+## 设置卡片（DSH Web UI）
+
+0.1.1 起，插件在 DSH 的 Web 设置页注册一张「3D 生成供应商配置」卡片（官方
+rc.7 起支持的插件自注册设置卡片，见 [docs/dsh-api.md](docs/dsh-api.md) 设置卡片章节）：
+
+- **host 半边**（`src/settings.ts`）注册 `gen3d` 设置命名空间；schema 缺省引用即
+  `PROVIDER_ENV_KEYS`，解析后的 `apiKeyEnv` 引用经 `setProviderRefSource` 接回
+  `src/config.ts` 工具密钥解析——卡片改写引用后，工具随之改读对应变量名；
+- **浏览器半边**（`src/client/`）以同 key 注册卡片：四家供应商 real/mock 状态徽标
+  （configured → real，否则 mock 回退）+ 凭证变量名输入。configured/writable 事实
+  经凭证域 `credentials.describe` 取得，永不含密钥值；
+- 构建：`tsdown.config.ts` 自复刻官方 clientBundle 输出格式（lazy-CJS factory，
+  入口固定 `lib/client.js`）；卡片由 DSH client-modules 按 `dsh.client` 声明自动
+  服务到 Web 页面，无需重编 web 应用。
+- 说明：Hunyuan3D 的 TC3 密钥对路径不经过凭证域，卡片只反映
+  `HUNYUAN3D_API_KEY`（TokenHub）路径状态。
 
 ## 布局
 
 ```
 dsh-gen3d/
-├── package.json          # npm 包 + dsh.bundle 元数据（patch → ./cordis.patch.yml）
+├── package.json          # npm 包 + dsh.bundle 元数据（patch → ./cordis.patch.yml）+ dsh.client（浏览器半边）
 ├── cordis.patch.yml      # DSH 服务注入：id: gen3d
-├── tsconfig.json
+├── tsconfig.json         # host 半边（node）
+├── tsconfig.client.json  # 浏览器半边（DOM + JSX，→ lib/client/）
+├── tsdown.config.ts      # 浏览器半边 bundle（自复刻官方 clientBundle 格式 → lib/client.js）
 ├── src/                  # 工具实现（ctx.tools.register(defineTool(...))）
-│   ├── config.ts         # 凭证四层读取（readProviderKey 等，唯一密钥入口）
+│   ├── config.ts         # 凭证四层读取（readProviderKey 等，唯一密钥入口；设置节引用接线）
+│   ├── settings.ts       # 设置卡片 host 半边（gen3d 命名空间 + schema）
 │   ├── storage.ts        # Gen3dStore 资产落盘 / 缓存 / 审计 / 锁
+│   ├── client/           # 设置卡片浏览器半边（注册 / 控制器 / 组件）
 │   └── providers/        # 四家官方 API 直连（types 契约 + meshy / hunyuan3d / tripo3d / rodin）
 ├── skills/               # 随包分发的 agent 技能
 └── docs/
