@@ -157,9 +157,9 @@ export interface MeshyTaskResult {
 export interface MeshyTextPreviewInput {
   /** 物体描述，必填，最长 600 字符 */
   prompt: string
-  /** standard（默认，高细节）/ lowpoly（低模；选 lowpoly 时 ai_model/topology/target_polycount/should_remesh 被官方忽略） */
+  /** standard（默认，高细节）/ smart-topology（meshy-t2；text-to-3d 亦支持）/ lowpoly（已废弃） */
   modelType?: 'standard' | 'lowpoly'
-  /** meshy-5 / meshy-6 / latest（默认 latest = Meshy 6） */
+  /** meshy-5 / meshy-6 / meshy-7 / latest（默认 latest = Meshy 7；2026-08 官方 changelog） */
   aiModel?: string
   shouldRemesh?: boolean
   /** 目标面数（1,000–300,000，越界钳制） */
@@ -187,7 +187,7 @@ export interface MeshyTextRefineInput {
   /** 与 preview 的模型不兼容会 400（官方失败模式） */
   aiModel?: string
   moderation?: boolean
-  /** 仅 meshy-6/latest；去掉基础色贴图上的高光阴影 */
+  /** 仅 meshy-6 生效；meshy-7/latest 接受但忽略（2026-08 官方 changelog）；去掉基础色贴图上的高光阴影 */
   removeLighting?: boolean
   targetFormats?: readonly string[]
   alphaThumbnail?: boolean
@@ -320,7 +320,8 @@ export class MeshyProvider implements Gen3dProvider {
   /**
    * 统一生成提交。text → preview 阶段；两阶段的 refine 经 providerOptions 透传：
    * `{ mode: 'refine', preview_task_id: '<preview task id>' }`（prompt 作 texture_prompt）。
-   * providerOptions 其余字段按官方 snake_case 协议透传进请求体。
+   * providerOptions 其余字段按官方 snake_case 协议透传进请求体；仅 refine 分支会剔除
+   * preview/image 专属及官方已废弃字段（REFINE_STRIP_KEYS，见 docs/providers/meshy-api.md §2.2）。
    */
   async submitGeneration(req: GenerationRequest, opts?: SubmitOptions): Promise<MeshyTaskHandle> {
     const options = req.providerOptions ?? {}
@@ -345,6 +346,10 @@ export class MeshyProvider implements Gen3dProvider {
     // 契约级判别字段不属 Meshy 官方请求体（preview/refine 的 mode 由 build*Payload 写入）
     delete rest.mode
     delete rest.preview_task_id
+    if (kind === 'text-to-3d-refine') {
+      // refine 参数表无 preview/image 专属字段，剔除避免官方严格校验未知字段返回 400（见 REFINE_STRIP_KEYS）
+      for (const key of REFINE_STRIP_KEYS) delete rest[key]
+    }
     Object.assign(payload, rest)
     return this.submit(kind, payload, opts)
   }
@@ -716,6 +721,30 @@ function buildPreviewPayload(input: MeshyTextPreviewInput): Record<string, unkno
   if (input.autoSize !== undefined) p.auto_size = input.autoSize
   return p
 }
+
+/**
+ * refine 请求体黑名单：preview / image 专属字段 + 官方已废弃字段。
+ * 官方 refine 参数表（docs/providers/meshy-api.md §2.2）仅有 mode / preview_task_id /
+ * enable_pbr / texture_resolution / texture_prompt / texture_image_url / ai_model /
+ * moderation / remove_lighting / target_formats / alpha_thumbnail / auto_size；
+ * hd_texture 虽在表中但已标记 ⚠ 已废弃（等价 texture_resolution: "4k"），一并剔除。
+ * 以下字段不属 refine 参数（preview/image 专属或官方已废弃），若官方严格校验未知字段，
+ * 混入请求体会 400。剔除用黑名单而非白名单：未来官方新增 refine 字段无需改代码即透传。
+ */
+const REFINE_STRIP_KEYS: readonly string[] = [
+  'target_polycount',
+  'model_type',
+  'pose_mode',
+  'should_remesh',
+  'ultra_mode',
+  'should_texture',
+  'image_enhancement',
+  'multi_view_thumbnails',
+  'symmetry_mode',
+  'is_a_t_pose',
+  'art_style',
+  'hd_texture',
+]
 
 function buildRefinePayload(input: MeshyTextRefineInput): Record<string, unknown> {
   const previewTaskId = input.previewTaskId.trim()

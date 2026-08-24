@@ -212,6 +212,148 @@ describe('提交：text-to-3d 两阶段', () => {
   })
 })
 
+describe('提交：text-to-3d refine 字段过滤', () => {
+  it('refine 请求体剔除 preview/image 专属及已废弃字段（黑名单，即便显式传入）', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      {
+        test: /\/openapi\/v2\/text-to-3d$/,
+        handler: (_url, init) => {
+          const body = JSON.parse(bodyOf(init)) as { mode?: string }
+          return jsonResp({ result: body.mode === 'refine' ? 'rf-f' : 'pv-f' }, 202)
+        },
+      },
+    ])
+    const provider = new MeshyProvider({ fetchImpl })
+    await provider.submitGeneration({
+      mode: 'text',
+      prompt: '',
+      providerOptions: {
+        mode: 'refine',
+        preview_task_id: 'rf-f',
+        target_polycount: 30_000,
+        model_type: 'standard',
+        pose_mode: 'a-pose',
+        should_remesh: true,
+        ultra_mode: true,
+        should_texture: true,
+        image_enhancement: true,
+        multi_view_thumbnails: true,
+        symmetry_mode: 'auto',
+        is_a_t_pose: false,
+        art_style: 'realistic',
+        hd_texture: true,
+      },
+    })
+    const body = calls[0]?.body ?? {}
+    expect(body.mode).toBe('refine')
+    expect(body.preview_task_id).toBe('rf-f')
+    for (const key of [
+      'target_polycount',
+      'model_type',
+      'pose_mode',
+      'should_remesh',
+      'ultra_mode',
+      'should_texture',
+      'image_enhancement',
+      'multi_view_thumbnails',
+      'symmetry_mode',
+      'is_a_t_pose',
+      'art_style',
+      'hd_texture',
+    ]) {
+      expect(body[key]).toBeUndefined()
+    }
+  })
+
+  it('refine 请求体保留官方合法字段及 preview_task_id/mode', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      {
+        test: /\/openapi\/v2\/text-to-3d$/,
+        handler: (_url, init) => {
+          const body = JSON.parse(bodyOf(init)) as { mode?: string }
+          return jsonResp({ result: body.mode === 'refine' ? 'rf-f' : 'pv-f' }, 202)
+        },
+      },
+    ])
+    const provider = new MeshyProvider({ fetchImpl })
+    await provider.submitGeneration({
+      mode: 'text',
+      prompt: '',
+      providerOptions: {
+        mode: 'refine',
+        preview_task_id: 'rf-f',
+        enable_pbr: true,
+        texture_resolution: '4k',
+        texture_prompt: 'green metal armor',
+        texture_image_url: 'https://example.com/tex.png',
+        ai_model: 'meshy-7',
+        moderation: true,
+        remove_lighting: false,
+        target_formats: ['glb'],
+        alpha_thumbnail: true,
+        auto_size: true,
+      },
+    })
+    const body = calls[0]?.body ?? {}
+    expect(body).toMatchObject({
+      mode: 'refine',
+      preview_task_id: 'rf-f',
+      enable_pbr: true,
+      texture_resolution: '4k',
+      texture_prompt: 'green metal armor',
+      texture_image_url: 'https://example.com/tex.png',
+      ai_model: 'meshy-7',
+      moderation: true,
+      remove_lighting: false,
+      target_formats: ['glb'],
+      alpha_thumbnail: true,
+      auto_size: true,
+    })
+  })
+
+  it('未列入黑名单的未知自定义字段仍透传（黑名单语义：非白名单拒绝）', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      {
+        test: /\/openapi\/v2\/text-to-3d$/,
+        handler: (_url, init) => {
+          const body = JSON.parse(bodyOf(init)) as { mode?: string }
+          return jsonResp({ result: body.mode === 'refine' ? 'rf-f' : 'pv-f' }, 202)
+        },
+      },
+    ])
+    const provider = new MeshyProvider({ fetchImpl })
+    await provider.submitGeneration({
+      mode: 'text',
+      prompt: '',
+      providerOptions: { mode: 'refine', preview_task_id: 'rf-f', future_refine_field: 'kept', some_flag: 1 },
+    })
+    const body = calls[0]?.body ?? {}
+    expect(body.future_refine_field).toBe('kept')
+    expect(body.some_flag).toBe(1)
+  })
+
+  it('preview 分支不受影响：target_polycount / ultra_mode 等照常进 preview 请求体', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      { test: /\/openapi\/v2\/text-to-3d$/, handler: () => jsonResp({ result: 'pv-f' }, 202) },
+    ])
+    const provider = new MeshyProvider({ fetchImpl })
+    await provider.submitGeneration({
+      mode: 'text',
+      prompt: 'knight',
+      providerOptions: { target_polycount: 20_000, ultra_mode: true, pose_mode: 'a-pose', model_type: 'standard' },
+    })
+    const body = calls[0]?.body ?? {}
+    expect(body).toMatchObject({
+      mode: 'preview',
+      prompt: 'knight',
+      target_polycount: 20_000,
+      ultra_mode: true,
+      pose_mode: 'a-pose',
+      model_type: 'standard',
+    })
+  })
+})
+
 describe('提交：image / multi-image（含 smart-topology 低模）', () => {
   it('image-to-3d：image_url 直传', async () => {
     const { fetchImpl, calls } = mockFetch([

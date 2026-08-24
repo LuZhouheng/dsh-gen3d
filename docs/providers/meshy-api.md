@@ -1,7 +1,9 @@
 # Meshy 官方 API 协议文档（DSH 迁移参考）
 
 > 本文档全部内容基于 Meshy 官方文档（docs.meshy.ai）实际抓取整理，不含任何第三方网关包装的字段。
-> 抓取日期：2026-08-13。官方文档为英文，本文为中文转述 + 字段直译。
+> 抓取日期：2026-08-24。官方文档为英文，本文为中文转述 + 字段直译。
+> 本次抓取另核对官方合并全文 <https://docs.meshy.ai/llms-full.txt> 与官方免鉴权动作目录 JSON（§5.3）；
+> 与 2026-08-13 快照的差异（meshy-7 / ultra_mode / smart-topology 等）已在文内标注。
 >
 > 来源 URL（均为官方）：
 > - API 总览：https://docs.meshy.ai/en/api/
@@ -12,6 +14,8 @@
 > - Rigging：https://docs.meshy.ai/en/api/rigging
 > - Animation：https://docs.meshy.ai/en/api/animation
 > - Animation Library（动作目录）：https://docs.meshy.ai/en/api/animation-library
+> - Asset Retention（资产保留）：https://docs.meshy.ai/en/api/asset-retention
+> - Changelog：https://docs.meshy.ai/en/api/changelog
 > - Errors：https://docs.meshy.ai/en/api/errors
 > - Rate Limits：https://docs.meshy.ai/en/api/rate-limits
 > - Balance：https://docs.meshy.ai/en/api/balance
@@ -26,7 +30,7 @@
 - 通用任务状态机（所有任务类型一致）：`PENDING` → `IN_PROGRESS` → `SUCCEEDED` / `FAILED` / `CANCELED`。
 - `progress` 字段 0–100；`started_at` / `created_at` / `finished_at` / `expires_at` 均为 **毫秒级 epoch 时间戳**（官方文档注明遵循 RFC 3339 表示法；未开始时为 0）。
 - `consumed_credits`：任务消耗积分。PENDING/IN_PROGRESS/SUCCEEDED 时存在；FAILED 返回 0（**失败退费**）。
-- 资产下载 URL 是带签名的临时 URL，有 `expires_at` 有效期（动画文档示例约 3 天，非企业账号资产约 3 天后删除——该 3 天说法来自 Meshy 官方技能/社区文档，API 文档本身以 `expires_at` 字段为准）。**拿到 URL 后应立即下载**。
+- 资产下载 URL 是带签名的临时 URL，有 `expires_at` 有效期。官方 API 文档现设专页 [Asset Retention](https://docs.meshy.ai/en/api/asset-retention)：非 Enterprise 账号生成的资产最多保留 **3 天**（动画文档示例约 3 天即该口径），Enterprise 无限保留；API 文档本身以 `expires_at` 字段为准。**拿到 URL 后应立即下载**，过期后无刷新途径（窗口期内重查任务返回同一 URL）。
 - 任务列表分页：`page_num`（默认 1）、`page_size`（默认 10，最大 50）、`sort_by`（`+created_at` / `-created_at`）。
 - 通过 API 创建的任务不会出现在网页端 "My Assets" 里，只能用 List 端点找回 task id。
 
@@ -43,7 +47,7 @@ curl 约定：下文所有 `curl` 均为官方文档风格（官方文档自带 
 3. key 只显示一次，之后无法再查看；可随时吊销。可按用途建多个 key，用量分别统计。
 4. 每个请求带 `Authorization: Bearer <API_KEY>` 头（Bearer 前缀必须，见 [RFC 6750](https://datatracker.ietf.org/doc/html/rfc6750)）。
 
-> 官方文档**未记载** key 的字符串格式（社区普遍为 `msy-` 前缀，不作为依据）。
+> 官方文档明确 API key 格式为 `msy_<随机串>`（认证页示例 `msy_YOUR_API_KEY`；llms-full.txt 亦注明 “have the format `msy_<random-string>`”）。注意是下划线 `msy_` 前缀，非连字符。
 
 curl 验证：
 
@@ -67,9 +71,11 @@ curl https://api.meshy.ai/openapi/v1/balance \
 |---|---|---|---|---|
 | `mode` | string | 是 | — | 必须为 `"preview"` |
 | `prompt` | string | 是 | — | 物体描述，最长 600 字符 |
-| `model_type` | string | 否 | `standard` | `standard` 高细节；`lowpoly` 低模（选 lowpoly 时 `ai_model`/`topology`/`target_polycount`/`should_remesh` 被忽略） |
-| `ai_model` | string | 否 | `latest` | `meshy-5` / `meshy-6` / `latest`(Meshy 6) |
-| `should_remesh` | bool | 否 | `false`(meshy-6) / `true`(其他) | 是否启用 remesh 阶段；最高质量建议 false |
+| `model_type` | string | 否 | `standard` | `standard` 高细节；`smart-topology` 智能拓扑（用 `ai_model`: `meshy-t2`，5 积分，见下；选它时 `should_remesh`/`decimation_mode` 被忽略、仅接受 `topology: triangle`）；`lowpoly` ⚠ **已废弃**（仍兼容服务流量，建议 smart-topology；选 lowpoly 时 `ai_model`/`topology`/`target_polycount`/`should_remesh` 被忽略） |
+| `ai_model` | string | 否 | `latest` | standard 模式：`meshy-5` / `meshy-6` / `meshy-7` / `latest`(Meshy 7)；smart-topology 模式：`meshy-t2`（默认） |
+| `ultra_mode` | bool | 否 | `false` | Ultra 档生成，表面细节更精细；耗时更长，**+5 积分**；仅 `ai_model` 为 meshy-7/latest，且仅 preview 阶段 |
+| `should_remesh` | bool | 否 | `false`(meshy-6/7) / `true`(其他) | 是否启用 remesh 阶段；最高质量建议 false |
+| `target_polycount` | int | 否 | — | 目标面数（实际可能偏差）。两种独立情形：① `should_remesh: true` 的 standard 模型，100–300,000，默认 30,000（`decimation_mode` 设置时优先，本参数被忽略）；② `model_type: smart-topology` + `meshy-t2` 直接按此面数生成，100–15,000，默认 4,000 |
 | `symmetry_mode` | string | 否 | `auto` | ⚠ 已废弃，不再影响输出（off/auto/on） |
 | `pose_mode` | string | 否 | `""` | `a-pose` / `t-pose` / `""` 不指定 |
 | `is_a_t_pose` | bool | 否 | `false` | ⚠ 已废弃，改用 `pose_mode` |
@@ -106,14 +112,14 @@ curl https://api.meshy.ai/openapi/v2/text-to-3d \
 |---|---|---|---|---|
 | `mode` | string | 是 | — | `"refine"` |
 | `preview_task_id` | string | 是 | — | 已成功 preview 的任务 id |
-| `enable_pbr` | bool | 否 | `false` | 额外生成 PBR 贴图（metallic/roughness/normal）；`ai_model` 为 meshy-6/latest 时另含 emission 贴图（`texture_resolution: 8k` 时无 emission） |
-| `texture_resolution` | string | 否 | `2k` | `2k`(2048²)/`4k`(4096²)/`8k`(8192²)；4k/8k 要求 meshy-6/latest，8k 无 emission |
+| `enable_pbr` | bool | 否 | `false` | 额外生成 PBR 贴图（metallic/roughness/normal）；emission 贴图规则：`ai_model` 为 meshy-6 时产出（`texture_resolution: 8k` 时无 emission），**meshy-7/latest 不产出 emission** |
+| `texture_resolution` | string | 否 | `2k` | `2k`(2048²)/`4k`(4096²)/`8k`(8192²)；4k/8k 要求 meshy-6/7/latest，8k 无 emission |
 | `hd_texture` | bool | 否 | `false` | ⚠ 已废弃，等价 `texture_resolution: "4k"` |
 | `texture_prompt` | string | 否 | — | 附加贴图引导文本，最长 600 字符 |
 | `texture_image_url` | string | 否 | — | 2D 引导图：**公开 URL 或 base64 Data URI**（`data:image/jpeg;base64,...`），支持 jpg/jpeg/png |
-| `ai_model` | string | 否 | `latest` | 与 preview 的模型不兼容会报错（见 400 失败模式） |
+| `ai_model` | string | 否 | `latest` | `meshy-5` / `meshy-6` / `meshy-7` / `latest`(Meshy 7)；`latest` 与 preview 解析一致（当前均为 Meshy 7），latest preview + latest refine 必落同一贴图模型；与 preview 的模型不兼容会报错（见 400 失败模式） |
 | `moderation` | bool | 否 | `false` | 审查 texture_prompt 文本与 texture_image_url 图片 |
-| `remove_lighting` | bool | 否 | `true` | 去掉基础色贴图上的高光阴影；仅 meshy-6/latest |
+| `remove_lighting` | bool | 否 | `true` | 去掉基础色贴图上的高光阴影；**仅 meshy-6 生效**，meshy-7/latest 接受但忽略 |
 | `target_formats` / `alpha_thumbnail` / `auto_size` | — | 否 | — | 同 §2.1 |
 
 > `texture_image_url` 与 `texture_prompt` 同时给出时，**texture_prompt 优先**。
@@ -159,13 +165,14 @@ curl https://api.meshy.ai/openapi/v2/text-to-3d/018b314a-... \
 | `negative_prompt` / `art_style` / `texture_richness` | string | ⚠ 已废弃，保留兼容，无功能影响 |
 | `texture_prompt` | string | refine 阶段使用的引导文本 |
 | `texture_image_url` | string | 使用的引导图 URL |
+| `ultra_mode` | bool | 回显 preview 创建时显式设置的 ultra_mode 值；仅 meshy-7/latest 且显式设置时存在，否则省略 |
 | `thumbnail_url` | string | 模型缩略图下载 URL |
 | `alpha_thumbnail_url` | string | RGBA 透明缩略图（仅 `alpha_thumbnail: true` 且渲染成功时存在） |
 | `video_url` | string | ⚠ 已废弃（预览视频，未来移除） |
 | `progress` | int | 0–100；成功为 100 |
 | `started_at` / `created_at` / `finished_at` | timestamp | 毫秒 epoch；未开始/未完成时为 0 |
 | `status` | string | `PENDING` / `IN_PROGRESS` / `SUCCEEDED` / `FAILED` / `CANCELED` |
-| `texture_urls` | array | 贴图 URL 对象数组（通常 1 个）：`base_color`、`metallic`、`normal`、`roughness`（`enable_pbr: false` 时省略）、`emission`（`enable_pbr: false` 或 meshy-5 时省略） |
+| `texture_urls` | array | 贴图 URL 对象数组（通常 1 个）：`base_color`、`metallic`、`normal`、`roughness`（`enable_pbr: false` 时省略）、`emission`（`enable_pbr: false` 或 meshy-5 时省略；按 §2.2 `enable_pbr` 参数说明，meshy-7/latest 不产出 emission、8k 亦无——官方任务对象字段文案仅提 meshy-5，两处表述不一致，以 changelog 与参数说明为准） |
 | `preceding_tasks` | int | 排队中前面的任务数（仅 PENDING 时有意义） |
 | `task_error` | object | 失败详情，见 §8 |
 | `consumed_credits` | int | 消耗积分（FAILED 为 0，退费） |
@@ -234,8 +241,11 @@ curl https://api.meshy.ai/openapi/v1/image-to-3d \
 | `input_task_id` | string | 已完成的图片生成任务 id（Text to Image / Image to Image / Text to Image Multi-View / Image to Image Multi-View），须经 API 运行、SUCCEEDED，产出 1–4 张图 |
 | `image_urls` | string[] | **1–4 张**同物体不同角度的图（URL 或 base64 Data URI）。meshy-7/latest 时第 1 张为主视（正面），其余顺序无关 |
 | `ai_model` | string | `meshy-5`/`meshy-6`/`meshy-7`/`latest`(Meshy 7) |
-| `should_texture` / `should_remesh` | bool | 同 §3.1 |
+| `should_texture` | bool | 默认 `true`；false 跳过贴图阶段（mesh-only） |
+| `should_remesh` | bool | ⚠ **官方页面间默认值自相矛盾**：multi-image 页写 `false(meshy-6) / true(其他)`，text-to-3d 与 image-to-3d 页写 `false(meshy-6/7) / true(其他)`——实现**建议显式传值**，勿依赖默认 |
 | `symmetry_mode` / `is_a_t_pose` / `pose_mode` | — | 同 §2.1（前两者废弃） |
+| `texture_prompt` / `texture_image_url` | — | 贴图引导（文本 / 2D 图，规则同 §2.2；**与 `texture_image_urls` 互斥**，两者并存时 texture_prompt 优先） |
+| `texture_image_urls` | string[] | **1–4 张**同物体不同角度的贴图引导图（URL 或 base64 Data URI，jpg/jpeg/png），第 1 张为主视（正面）；**仅 `ai_model` meshy-7/latest**；与 `image_urls` 相互独立（两张列表可不同图、不同数量）；**不能与 `texture_image_url`/`texture_prompt` 组合**（官方失败模式另注：需 `should_texture: true`） |
 | `image_enhancement` | bool | 默认 true；仅 meshy-6/7/latest |
 | `remove_lighting` | bool | 默认 true；仅 meshy-6/7/latest |
 | `moderation` | bool | 审查 image_urls 每张图与 texture_prompt |
@@ -268,7 +278,7 @@ Task 对象与 §2.4 基本一致，差异点：
 - `type`：`image-to-3d` / `multi-image-to-3d`。
 - `model_urls` 增加 `pre_remeshed_glb`（仅 `should_remesh: true` 且 `save_pre_remeshed_model: true` 时存在，为 remesh 前的原始 GLB）。
 - `thumbnail_urls`：四视角缩略图对象 `{front, right, back, left}`（仅 `multi_view_thumbnails: true` 且成功时存在；`thumbnail_url` 等价 `thumbnail_urls.front`，兼容保留）。
-- `texture_urls`：emission 在 meshy-5/7/latest 时省略（与 Text to 3D 的 meshy-5 规则略有差异，见官方页面）。
+- `texture_urls`：emission 在 `enable_pbr: false` 或 `ai_model: meshy-5` 时省略（任务对象字段文案）；按本页 `enable_pbr` 参数说明（与 Text to 3D 同款规则）emission 仅 meshy-6 产出，meshy-7/latest 不产出；`texture_resolution: 8k` 时任何模型均无 emission。
 - Image to 3D 任务对象含 `expires_at`；`ultra_mode` 字段仅在 meshy-7/latest 且显式设置时回显。
 
 失败模式：400（缺 image_url/image_urls、input_task_id 无效、图片数量不在 1–4、格式不支持、URL 不可达 404/超时、base64 损坏、`enable_pbr` 与 `should_texture: false` 组合非法）、401、402、429。
@@ -355,7 +365,7 @@ Rigging Task 对象（注意输出包在 `result` 里）：
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `rig_task_id` | string | 是 | — | 成功完成的 rigging 任务 id（来自 `POST /openapi/v1/rigging`），其角色将被动画化 |
-| `action_id` | integer | 是 | — | 动作库 id（见 §5.4 动作目录） |
+| `action_id` | integer | 是 | — | 动作库 id（见 §5.3 动作目录） |
 | `post_process` | object | 否 | — | 可选后处理，省略则输出标准动画文件 |
 | `post_process.operation_type` | string | 条件必填 | — | `change_fps` / `fbx2usdz` / `extract_armature` |
 | `post_process.fps` | int | 条件必填 | `30` | 仅 `change_fps` 时有效；允许 `24/25/30/60` |
@@ -419,7 +429,11 @@ curl https://api.meshy.ai/openapi/v1/animations/018c425b-... \
 
 ### 5.3 动作目录
 
-官方**没有动作目录 API 端点**（官方文档未记载 catalog/actions 枚举端点），唯一权威来源是静态参考页 [Animation Library Reference](https://docs.meshy.ai/en/api/animation-library)：**action_id 取值 0–696**，每行格式 `id 动作名 分类 子分类`，例如：
+官方 [Animation Library](https://docs.meshy.ai/en/api/animation-library) 页现给出**完整目录 JSON**——页面原文：“The full list of available animations (with `action_id`, name, category, preview URL) is served as JSON at <https://api.meshy.ai/web/public/animations/resources> — fetch it directly to retrieve the current catalog.” 该端点为**免鉴权 GET**（`/web/public/` 前缀即网页端公共资源路径）；此前“官方没有动作目录 API 端点”的表述按此更新（官方有的是“动作库只读数据源”，并非创建/管理动作的认证 API）。
+
+实测（2026-08-24 抓取）：`result.total = 680`（即当前权威条数）；`id` 范围 **-2 ~ 696**——**-2**=`Walking`、**-1**=`Running` 为默认动作（`isDefault: true`，即绑骨自带基础动画所采用的两条），静态参考页的行列只列 0–696、未含 -2/-1；**90 条** `_inplace` 原地版本（JSON 中 90 条带 `tag` 标记，key 均以 `_inplace` 结尾）；`isFree` 实测 **22 条 `true`**（免费，含 -2/-1 两条默认动作）、**658 条 `false`**（收费标记，Animation 任务本身 3 积分，见官方 Pricing 表）；每条新增 **`rigType`** 维度：`biped`(2) / `style_01`(2) / `style_02`(671) / `style_03`(5)——静态参考页无此列。
+
+静态参考页行列格式仍为 `id 动作名 分类 子分类`，例如：
 
 ```
 0  Idle  DailyActions  Idle
@@ -434,9 +448,9 @@ curl https://api.meshy.ai/openapi/v1/animations/018c425b-... \
 ```
 
 - 目录共分大类：`Dancing`、`Fighting`（AttackingwithWeapon/Punching/Blocking/CastingSpell/GettingHit/Dying/Transitioning）、`DailyActions`（Idle/Interacting/Pushing/Sleeping/PickingUpItem/WorkingOut/LookingAround/Drinking/Transitioning）、`BodyMovements`（Acting/Climbing/VaultingOverObstacle/PerformingStunt/Jumping/HangingfromLedge/FallingFreely）、`WalkAndRun`（Walking/Running/CrouchWalking/Swimming/TurningAround）等。
-- id 存在空洞（如 332、373–374、380、383、400、418、423–424、454、469、600、603、614、633–634、653、655 等缺失），**不要假设 0–696 连续**。
+- id 存在空洞（如 332、373–374、380、383、400、418、423–424、454、469、600、603、614、633–634、653、655 等缺失），**不要假设 id 连续**（含 -2/-1 与 0–696 全范围）。
 - 后缀 `_inplace`（如 `601 Backflip_inplace`、`692 walking_2_inplace`）为原地（不位移）版本。
-- 动作目录为官方静态页面；DSH 插件需随包固化一份静态目录（本包已固化 ~680 条 meshy-actions.ts 目录；官方现目录约 690 条）。
+- 目录条数以该 JSON 的 `total` 字段为准（实测 680）；DSH 插件需随包固化一份静态目录（本包已固化 ~680 条 meshy-actions.ts 目录，与官方 JSON 一致）。
 
 ### 5.4 关于 "绑骨即带动作"
 
@@ -444,9 +458,46 @@ curl https://api.meshy.ai/openapi/v1/animations/018c425b-... \
 
 ---
 
-## 6. 余额 / 配额 / 速率限制
+## 6. 新增端点与页面（2026-08）——官方地图（dsh-gen3d 未实现）
 
-### 6.1 余额查询
+> 以下端点 / 页面均为官方文档已收录、但 dsh-gen3d 的 meshy provider **未实现**
+> （`src/providers/meshy.ts` 仅覆盖 v2 text-to-3d、v1 image-to-3d、multi-image-to-3d、
+> rigging、animations 与 balance，即本文档 §2–§5 与 §7 的已实现范围）。本节仅作能力地图，
+> 细节以各官方页面为准；若后续实现，参数以官方页面（或 llms-full.txt）为准逐一核对。
+
+### 6.1 新增/独立端点（官方文档已单独成页）
+
+| 端点 | 路径 | 备注 |
+|---|---|---|
+| Remesh | `POST /openapi/v1/remesh` | 重拓扑/降面/转换；convert/resize 已拆独立端点，Remesh 上的旧参数仍兼容（2026-05-22） |
+| Convert | `POST /openapi/v1/convert` | 格式转换（2026-05-22 自 Remesh 拆出） |
+| Resize | `POST /openapi/v1/resize` | 按高度/最长边缩放（2026-05-22 拆出；`resize_longest_side` 2026-05-12 加入） |
+| UV Unwrap | `POST /openapi/v1/uv-unwrap` | 生成新 UV 布局（2026-06-15 新增；≤40,000 面，超出先 Remesh；5 积分） |
+| Retexture | `POST /openapi/v1/retexture` | 模型重贴图；**旧 Text to Texture 路径已下线**——无鉴权探测对照：`/openapi/v1/text-to-texture` 返回 404，`/openapi/v1/retexture` 返回 401（端点存在与否即此区分） |
+| Text to Image / Image to Image | `POST /openapi/v1/text-to-image`、`POST /openapi/v1/image-to-image` | 图片生成/编辑（2025-12-31 新增；`remove_background` 2026-08-17 加入） |
+| Multi-Color Print | `POST /openapi/v1/print/multi-color` | 转多色 3MF（1–16 色板，10 积分；`style` 参数 2026-08-20 加入） |
+| Analyze / Repair Printability | `POST /openapi/v1/print/analyze`、`POST /openapi/v1/print/repair` | FDM 可打印性分析（免费）/ 修复（10 积分）；2026-05-07 新增 |
+| Creative Lab 系列 | `/openapi/creative-lab/<product>/v1/{prototype,build}` | Keychain / Fridge Magnet / Figure / Vinyl Figure / Brick Figure / Keycap / Lamp；prototype（6 积分）→ build（30–50 积分）两段链式（`input_task_id` 串联），产品级 URL 各自版本线 |
+
+### 6.2 新增页面（非端点）
+
+- [Asset Retention](https://docs.meshy.ai/en/api/asset-retention)：API 资产非 Enterprise 默认保留 3 天，Enterprise 无限保留（§0）。
+- [Pricing](https://docs.meshy.ai/en/api/pricing)：各端点积分表（Animation 3 积分、Smart Topology preview 5 积分、8K 贴图 15 积分等）。
+- [Webhooks](https://docs.meshy.ai/en/api/webhooks)：任务状态回调（省轮询）。
+- [Changelog](https://docs.meshy.ai/en/api/changelog)：本文档各字段的变更史（2026-08-13/18/20 条目即本次对齐依据）。
+- [AI Integration](https://docs.meshy.ai/en/api/ai)（MCP）：官方 MCP 服务器 `@meshy-ai/meshy-mcp-server`。
+- [API Playground](https://docs.meshy.ai/en/api/playground)：交互式控制台（2026-06-17 起文档可用，Pro 及以上计划）。
+
+### 6.3 与本插件的关系
+
+- 本节端点均未实现，仅作地图：`gen3d_retopo_lowpoly` 走 hunyuan3d / tripo3d 供应商路由（见 [KNOWN-GAPS](../KNOWN-GAPS.md) #3），并非 Meshy Remesh；Meshy 侧降面/重贴图（Remesh / Retexture）是后续若要补齐的候选路由，路径以上表为准。
+- 结论清单中“官方文档未记载、勿依赖”的条目按本节澄清（§9 结论 7）。
+
+---
+
+## 7. 余额 / 配额 / 速率限制
+
+### 7.1 余额查询
 
 `GET /openapi/v1/balance`（[Balance](https://docs.meshy.ai/en/api/balance)），返回 `{"balance": <int>}`，即当前剩余积分。
 
@@ -458,7 +509,7 @@ curl https://api.meshy.ai/openapi/v1/balance \
 
 > 官方**没有**“积分消耗明细/历史”端点（官方文档未记载）。单任务消耗可从任务对象的 `consumed_credits` 得知。
 
-### 6.2 速率限制（[Rate Limits](https://docs.meshy.ai/en/api/rate-limits)）
+### 7.2 速率限制（[Rate Limits](https://docs.meshy.ai/en/api/rate-limits)）
 
 两类限制，**按账号维度**统计（所有 API key 共享）：
 
@@ -483,11 +534,11 @@ curl https://api.meshy.ai/openapi/v1/balance \
 
 ---
 
-## 7. 错误码格式（[Errors](https://docs.meshy.ai/en/api/errors)）
+## 8. 错误码格式（[Errors](https://docs.meshy.ai/en/api/errors)）
 
 两类错误：
 
-### 7.1 请求级错误（HTTP 状态码即时返回）
+### 8.1 请求级错误（HTTP 状态码即时返回）
 
 响应体为单一 `message` 字段：`{"message": "<描述>"}`。
 
@@ -500,10 +551,10 @@ curl https://api.meshy.ai/openapi/v1/balance \
 | 402 Payment Required | 账号余额不足 |
 | 403 Forbidden | 被禁止；典型场景：**浏览器端 JS 直接调 API 被 CORS 拦截**（必须服务端代理） |
 | 404 Not Found | 资源不存在（如无效 task id） |
-| 429 Too Many Requests | 超速率限制（见 §6.2） |
+| 429 Too Many Requests | 超速率限制（见 §7.2） |
 | 5xx | 服务端错误（看官方状态页/Discord） |
 
-### 7.2 任务级错误（`task_error` 对象，轮询时在任务响应中）
+### 8.2 任务级错误（`task_error` 对象，轮询时在任务响应中）
 
 字段：
 
@@ -539,12 +590,12 @@ curl https://api.meshy.ai/openapi/v1/balance \
 
 ---
 
-## 8. 对 DSH 迁移的关键结论
+## 9. 对 DSH 迁移的关键结论
 
-1. **认证**：Bearer key 由用户在官网 API settings 页自建（meshy.ai 账号），天然适配 DSH 的 credentials 机制（环境变量 / `$DSH_HOME/.credentials.yaml`），插件不内置 key；未配置时回退 mock 与余额预检（`GET /openapi/v1/balance` 免费、不计队列）。
+1. **认证**：Bearer key 由用户在官网 API settings 页自建（meshy.ai 账号），天然适配 DSH 的 credentials 机制（环境变量 / `$DSH_HOME/.credentials.yaml`——⚠ DSH host 0.1.1-rc.2 起该文件为 host 接管的版本化格式，插件读不到 `refs:` 下的键，本机 key 请走环境变量或 `$DSH_HOME/.env`，见 docs/CREDENTIALS.md §3.1），插件不内置 key；未配置时回退 mock 与余额预检（`GET /openapi/v1/balance` 免费、不计队列）。
 2. **任务异步模型**：所有能力都是 create → poll → download 三步。DSH 的 `ctx.jobs` 长任务模式正好对应；SSE `/stream` 可选但非必需（轮询即可）。
 3. **计费预检**：创建前可用 `GET /openapi/v1/balance` 检查余额；`402` 表示余额不足；`429` 需区分 `RateLimitExceeded`（限频退避）与 `NoMoreConcurrentTasks`（队列满，等待而非重试）。
 4. **两阶段文生 3D**：`mode: preview`（几何）→ `mode: refine`（贴图）；`texture_image_url` 支持 base64 Data URI，可避免外网 URL 依赖。
-5. **绑骨/动作**：rigging 输出自带 walk/run（`basic_animations`）；Animation 按 `rig_task_id + action_id` 执行；动作目录仅静态参考页（0–696，有空洞），需随包固化静态目录（官方页面约 690 条）。
+5. **绑骨/动作**：rigging 输出自带 walk/run（`basic_animations`）；Animation 按 `rig_task_id + action_id` 执行；动作目录以官方免鉴权 JSON 为准（§5.3：total 680、id -2~696、90 条 `_inplace`、22 条 `isFree: true`），需随包固化静态目录（本包 ~680 条）。
 6. **下载**：资产 URL 带签名且有过期时间（`expires_at`），必须立即下载；文件格式用 `target_formats` 显式限定以减少任务耗时。
-7. **官方文档未记载、勿依赖**：API key 字符串格式；Text to 3D 任务对象的 `expires_at`；rigging 的显式参数（如 `generate_basic_animations` / `enable_animation` / `animation_action_id`、`rig_type`）；动作目录 API 端点；积分消费明细端点。低模重拓扑官方路径为 Image to 3D 的 `smart-topology`（`meshy-t2` + `target_polycount`）或 `model_type: lowpoly`（废弃），另有独立 Remesh API（本文档分工未展开，见对应分工文档）。
+7. **官方文档未记载、勿依赖**：Text to 3D 任务对象的 `expires_at`；rigging 的显式参数（如 `generate_basic_animations` / `enable_animation` / `animation_action_id`、`rig_type`）；动作目录的「创建/管理动作」认证 API（官方仅有免鉴权只读 JSON 目录，§5.3）；积分消费明细端点（余额只有总额）。API key 格式官方已有记载（`msy_<随机串>`，§1，注意下划线）。低模/智能拓扑官方路径：Text to 3D（§2.1）与 Image to 3D（§3.1）的 `model_type: smart-topology`（`meshy-t2` + `target_polycount`，Text to 3D preview 5 积分），`model_type: lowpoly` 已废弃；另有独立 Remesh API（§6.1，本插件未实现）。本文档分工（生成为主）未展开的端点见 §6。
