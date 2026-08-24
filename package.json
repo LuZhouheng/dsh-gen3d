@@ -1,6 +1,6 @@
 {
   "name": "dsh-gen3d",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DeepSeek Harness 的 3D 角色生成插件：直连 Meshy / Hunyuan3D / Tripo3D / Rodin 官方 API，用户自配 key，未配置时回退确定性 mock。",
   "type": "module",
   "main": "lib/index.js",
