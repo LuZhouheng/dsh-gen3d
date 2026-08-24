@@ -39,10 +39,11 @@ description: 为 3D 游戏创建生产级资产（角色 / 道具 / 环境）的
    - 无设定图：`gen3d_text_to_3d` 先文生，再看结果决定是否精修
    - 角色要动作：生成时 `providerParams.pose_mode: 'a-pose'`（Meshy）；`enablePbr` 默认开（要贴图就别关）
    - 需要动作的角色：`gen3d_auto_rig` 绑骨（仅 `characters` 槽）→ `gen3d_list_motions` 查目录 → `gen3d_apply_motion`（一次一个动作、按动作幂等）→ playable 五工具（`gen3d_get_playable_profile` / `gen3d_set_playable_profile` / `gen3d_set_playable_motion_mapping` / `gen3d_export_playable_character` / `gen3d_adopt_playable_character`）导出游戏可用交付
+   - 高模降面到预算：`gen3d_retopo_lowpoly`（`provider: 'meshy'`，官方 Remesh API，5 积分/次）——源资产保留、产出规整低面数新资产；适用 inspect 超面数或生成时未控面数的资产
    - 道具 / 环境件：`assetSlot: 'meshes'`，不绑骨（软门控只认 characters 槽）
 
 4. **验证闭环（每个资产必走）**：
-   - `gen3d_inspect_asset` 对照预算档自检（面数 / 贴图 / 材质三科）——**违规要处理**：超面数说明重生成（走低模降档）或与用户确认放行，不许默认交付超标资产
+   - `gen3d_inspect_asset` 对照预算档自检（面数 / 贴图 / 材质三科）——**违规要处理**：超面数首选 `gen3d_retopo_lowpoly`（`provider: 'meshy'`，本地资产直接可用——Meshy 资产自动取 sidecar 任务 id（或显式 `originalTaskId`），任意本地 GLB（含非 Meshy 资产）读文件直传，无需公网 URL；`targetPolycount` 按预算档给值，如 prop 档 ≤5000（与 `detailLevel` 互斥、给定优先），或 `detailLevel` 走 decimation_mode 减面档），重拓扑后再 `gen3d_inspect_asset` 复查；仍不达标才考虑重生成（走低模降档）或与用户确认放行，不许默认交付超标资产
    - `gen3d_render_preview` 渲染自检：web 用户去会话「3D 资产」页签**交互查看**；CLI 用户回报**预览文件路径**（软渲染为视口级观感，不看引擎内最终效果）
    - `gen3d_score_quality` 跑客观五维（geometry / topology / texture / pbr / prompt_fidelity），不达标由用户决定重生成或换 provider
    - `gen3d_rename_asset` 规范命名 → 交付：资产路径 + 规格摘要 + 预算对照结果
@@ -50,7 +51,7 @@ description: 为 3D 游戏创建生产级资产（角色 / 道具 / 环境）的
 5. **效率与传参纪律**：
    - **如实转达配额消耗**：工具返回的 credits / 配额信息必须告诉用户，不隐瞒
    - 同参数重跑命中缓存（`cacheHit: true`）复用旧资产不重复烧配额——先看结果再决定要不要重试
-   - `providerParams` 只放**白名单字段**（Meshy 如 `ai_model` / `model_type` / `target_polycount` / `pose_mode` / `should_remesh` / `ultra_mode`），无关字段会被过滤忽略，别指望透传私有字段
+   - `providerParams` 只放**白名单字段**（Meshy 如 `ai_model` / `model_type` / `target_polycount` / `pose_mode` / `should_remesh` / `decimation_mode` / `topology` / `origin_at`），无关字段会被过滤忽略，别指望透传私有字段
    - 长任务返回 `{ kind: 'background', jobId }` 句柄：用 `job_output` 查进度（平台没有 `job_read`）、`job_kill` 终止
    - 未配置 key 时全链路走确定性 mock（`usedMock: true`）——能跑通但**不是真实模型**，交付前必须提醒用户配 key
 

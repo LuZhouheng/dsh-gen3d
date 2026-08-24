@@ -192,10 +192,11 @@ describe('gen3d_inspect_asset', () => {
   it('render 摘要自足：含统计数字与违规条目（text-only 模型可读）', async () => {
     const assetPath = await saveAsset('big.glb', await buildGridGlb(125, 125));
     const value = (await gen3dInspectAsset.execute({ asset: assetPath, budget: 'prop' }, EXEC)) as Record<string, unknown>;
-    const [block] = gen3dInspectAsset.output.render({ asset: assetPath, budget: 'prop' }, value) as {
+    const blocks = gen3dInspectAsset.output.render({ asset: assetPath, budget: 'prop' }, value) as {
       type: string;
       text: string;
     }[];
+    const block = blocks[0]!;
     expect(block.type).toBe('text');
     expect(block.text).toContain('big.glb');
     expect(block.text).toContain('31250'); // 三角形数

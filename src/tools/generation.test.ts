@@ -15,6 +15,7 @@ import {
   gen3dProviderStatus,
   gen3dRefineMesh,
   gen3dRenameAsset,
+  gen3dRetopoLowpoly,
   gen3dScoreQuality,
   gen3dTextTo3d,
   gen3dViewsTo3d,
@@ -108,6 +109,34 @@ describe('gen3d_text_to_3d', () => {
   it('prompt 缺失 → invalid_prompt 失败信封', async () => {
     const out = await gen3dTextTo3d.execute({}, EXEC);
     expect(out).toMatchObject({ ok: false, code: 'invalid_args' });
+  });
+
+  it('providerParams 白名单 2026-08-24 新键透传：decimation_mode/topology/origin_at/texture_image_urls 进 preview 请求体', async () => {
+    const fake = new FakeProvider('meshy', true);
+    fake.handlers.submitGeneration = () => Promise.resolve({ provider: 'meshy', taskId: 'preview-1' });
+    fake.handlers.pollTask = () =>
+      Promise.resolve(meshyResult('preview-1', [{ role: 'glb', format: 'glb', url: 'u', buffer: glbBytes('g') }]));
+    configureToolDeps({ store: tmp.store, providerFactory: factory(fake) });
+    const out = await gen3dTextTo3d.execute(
+      {
+        prompt: '武士',
+        provider: 'meshy',
+        enablePbr: false,
+        providerParams: {
+          decimation_mode: 2,
+          topology: 'triangle',
+          origin_at: 'bottom',
+          texture_image_urls: ['https://x/1.png', 'https://x/2.png'],
+        },
+      },
+      EXEC,
+    );
+    expect(out).toMatchObject({ ok: true });
+    const req = fake.calls.find((c) => c.method === 'submitGeneration')!.args[0] as { providerOptions: Record<string, unknown> };
+    expect(req.providerOptions.decimation_mode).toBe(2);
+    expect(req.providerOptions.topology).toBe('triangle');
+    expect(req.providerOptions.origin_at).toBe('bottom');
+    expect(req.providerOptions.texture_image_urls).toEqual(['https://x/1.png', 'https://x/2.png']);
   });
 });
 
@@ -235,6 +264,130 @@ describe('gen3d_refine_mesh', () => {
     expect(manifest.custom.meshyTaskRefs).toEqual({ previewTaskId: 'preview-9', resultTaskId: 'refine-9' });
     configureToolDeps({});
     tmp.cleanup();
+  });
+});
+
+describe('gen3d_retopo_lowpoly', () => {
+  let tmp: TempStore;
+  beforeEach(() => {
+    tmp = makeStore();
+    configureToolDeps({ store: tmp.store });
+  });
+  afterEach(() => {
+    configureToolDeps({});
+    tmp.cleanup();
+  });
+
+  /** 种入一个 meshes 槽源资产（custom 可覆盖），返回其资产相对路径。 */
+  async function seedSource(fileName: string, custom: Record<string, unknown> = {}): Promise<string> {
+    await tmp.store.saveAsset({
+      slot: 'meshes',
+      fileName,
+      data: glbBytes(fileName),
+      sidecar: {
+        custom: {
+          provider: 'meshy',
+          providerMode: 'real',
+          mode: 'text',
+          ...custom,
+        } as Gen3dSidecar['custom'],
+      },
+    });
+    return `assets/3d/meshes/${fileName}`;
+  }
+
+  /** 给 FakeProvider 挂 submitRemesh 扩展方法（工具层经类型探测调用）。 */
+  function attachRemesh(fake: FakeProvider): void {
+    (fake as FakeProvider & { submitRemesh?: (req: unknown, opts?: { signal?: AbortSignal }) => Promise<unknown> }).submitRemesh = async (req, opts) => {
+      fake.calls.push({ method: 'submitRemesh', args: [req, opts] });
+      return { provider: 'meshy', taskId: 'remesh-1' };
+    };
+  }
+
+  function remeshPoll(fake: FakeProvider): void {
+    fake.handlers.pollTask = (handle) =>
+      Promise.resolve(meshyResult(handle.taskId, [{ role: 'glb', format: 'glb', url: 'u', buffer: glbBytes('r') }]));
+  }
+
+  it('meshy：sidecar meshyTaskRefs.resultTaskId → input_task_id；targetPolycount 优先于 detailLevel（不映射 decimation）', async () => {
+    const assetPath = await seedSource('hero.glb', {
+      meshyTaskRefs: { previewTaskId: 'preview-1', resultTaskId: 'refine-1' },
+    });
+    const fake = new FakeProvider('meshy', true);
+    attachRemesh(fake);
+    remeshPoll(fake);
+    configureToolDeps({ store: tmp.store, providerFactory: factory(fake) });
+
+    const out = await gen3dRetopoLowpoly.execute(
+      { assetPath, provider: 'meshy', targetPolycount: 50000, detailLevel: 'low', polygonType: 'quadrilateral' },
+      EXEC,
+    );
+    expect(out).toMatchObject({ ok: true, usedMock: false, cacheHit: false });
+    const req = fake.calls.find((c) => c.method === 'submitRemesh')!.args[0] as Record<string, unknown>;
+    expect(req).toMatchObject({
+      inputTaskId: 'refine-1',
+      targetPolycount: 50000,
+      targetFormats: ['glb'],
+      topology: 'quad',
+    });
+    expect(req.decimationMode).toBeUndefined();
+    expect(req.modelUrl).toBeUndefined();
+    const manifest = (out as { manifest: Gen3dSidecar }).manifest;
+    expect(manifest.custom.meshyTaskRefs).toEqual({ previewTaskId: null, resultTaskId: 'remesh-1' });
+    expect(manifest.custom.sourceInputAssetPaths).toEqual([assetPath]);
+    expect(manifest.custom.assetSlot).toBe('meshes');
+  });
+
+  it('meshy：originalTaskId 优先于 sidecar 引用；detailLevel 映射 decimation_mode（high→2/medium→3/low→4）', async () => {
+    const assetPath = await seedSource('hero2.glb', {
+      meshyTaskRefs: { previewTaskId: 'preview-2', resultTaskId: 'refine-2' },
+    });
+    const fake = new FakeProvider('meshy', true);
+    attachRemesh(fake);
+    remeshPoll(fake);
+    configureToolDeps({ store: tmp.store, providerFactory: factory(fake) });
+
+    await gen3dRetopoLowpoly.execute(
+      { assetPath, provider: 'meshy', originalTaskId: 'task-x', detailLevel: 'medium' },
+      EXEC,
+    );
+    const req = fake.calls.find((c) => c.method === 'submitRemesh')!.args[0] as Record<string, unknown>;
+    expect(req).toMatchObject({ inputTaskId: 'task-x', decimationMode: 3, topology: 'quad' });
+    expect(req.targetPolycount).toBeUndefined();
+
+    // detailLevel=high → decimation_mode 2；low → 4
+    await gen3dRetopoLowpoly.execute({ assetPath, provider: 'meshy', originalTaskId: 'task-y', detailLevel: 'high' }, EXEC);
+    const req2 = fake.calls.filter((c) => c.method === 'submitRemesh')[1]!.args[0] as Record<string, unknown>;
+    expect(req2.decimationMode).toBe(2);
+    await gen3dRetopoLowpoly.execute({ assetPath, provider: 'meshy', originalTaskId: 'task-z', detailLevel: 'low' }, EXEC);
+    const req3 = fake.calls.filter((c) => c.method === 'submitRemesh')[2]!.args[0] as Record<string, unknown>;
+    expect(req3.decimationMode).toBe(4);
+  });
+
+  it('meshy：无可引用任务 id 时读本地源 GLB 转 Data URI（application/octet-stream）；非 Meshy 源资产同样适用', async () => {
+    const assetPath = await seedSource('local.glb', { provider: 'hunyuan3d', providerMode: 'real', mode: 'image' });
+    const fake = new FakeProvider('meshy', true);
+    attachRemesh(fake);
+    remeshPoll(fake);
+    configureToolDeps({ store: tmp.store, providerFactory: factory(fake) });
+
+    const out = await gen3dRetopoLowpoly.execute({ assetPath, provider: 'meshy', polygonType: 'triangle' }, EXEC);
+    expect(out).toMatchObject({ ok: true, usedMock: false });
+    const req = fake.calls.find((c) => c.method === 'submitRemesh')!.args[0] as Record<string, unknown>;
+    expect(req.inputTaskId).toBeUndefined();
+    expect(req.modelUrl).toMatch(/^data:application\/octet-stream;base64,/);
+    expect(String(req.modelUrl).split(',')[1]).toBe(Buffer.from(glbBytes('local.glb')).toString('base64'));
+    // 缺省：detailLevel=high → decimation 2；polygonType=triangle → topology triangle
+    expect(req).toMatchObject({ decimationMode: 2, topology: 'triangle', targetFormats: ['glb'] });
+  });
+
+  it('meshy 未配置 key → 确定性 mock 回退（usedMock: true），不探测扩展方法', async () => {
+    const assetPath = await seedSource('mock.glb');
+    const fake = new FakeProvider('meshy', false);
+    configureToolDeps({ store: tmp.store, providerFactory: factory(fake) });
+    const out = await gen3dRetopoLowpoly.execute({ assetPath, provider: 'meshy' }, EXEC);
+    expect(out).toMatchObject({ ok: true, usedMock: true });
+    expect(fake.calls.some((c) => c.method === 'submitRemesh')).toBe(false);
   });
 });
 

@@ -438,8 +438,8 @@ describe('随包 skill provider', () => {
     const provider = ctx.skillProviders[0]!;
     expect(provider.name).toBe('gen3d');
 
-    const candidates = await provider.list({});
-    expect(Array.isArray(candidates)).toBe(true);
+    const listed = await provider.list({});
+    const candidates: SkillCandidate[] = Array.isArray(listed) ? listed : [];
     // skills/ 目录扫描：至少含 generate-3d-character（并可能含同任务并行新增的技能）
     expect(candidates.length).toBeGreaterThanOrEqual(1);
     const candidate = (candidates as SkillCandidate[]).find((c) => c.name === 'generate-3d-character');

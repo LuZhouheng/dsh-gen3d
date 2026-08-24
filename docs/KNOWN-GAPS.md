@@ -51,28 +51,39 @@ meshy（默认）或 hunyuan3d 路由。
 **后续计划**：补 `importModel`（上传 GLB → 轮询导入任务 → 拿模型任务 id），在
 `gen3d_auto_rig` 的 Tripo 路由里接入「外部 GLB → 先导入再绑骨」。
 
-## 3. retopo-lowpoly 真实路径需公网源 URL（无 COS / 无模型上传链路）
+## 3. hunyuan3d 真实路径仍需公网源 URL；meshy 路由已落地（本地 GLB Data URI 直传）
 
-**现状**：`gen3d_retopo_lowpoly` 的真实路径依赖：
+**现状**：`gen3d_retopo_lowpoly` 的真实路径分三支：
 
-- `hunyuan3d`（默认）：TC3 `Submit3DSmartTopologyJob`，需 `sourceUrl`——
-  公网可达的源 GLB URL（官方约束，输入文件要公网 URL）；
+- `meshy`（已落地，首选规避路径）：Meshy 生成的资产经 sidecar
+  `custom.meshyTaskRefs.resultTaskId`（或显式 `originalTaskId`）走 Remesh API 的
+  `input_task_id`；**本地任意 GLB 读文件转 Data URI（`application/octet-stream`）
+  作 `model_url` 直传，无需公网 URL**（官方 Remesh 支持公网 URL 或 Data URI，
+  详见 `docs/providers/meshy-api.md` §6）；5 积分 / 次，`targetPolycount` /
+  `detailLevel`（→`decimation_mode`）/ `polygonType`（→`topology`）映射见该节注记；
+- `hunyuan3d`（默认，仍受官方约束）：TC3 `Submit3DSmartTopologyJob`，需 `sourceUrl`——
+  **公网可达**的源 GLB URL（官方约束，输入文件要公网 URL）；
 - `tripo3d`：智能低模，需 `originalTaskId`——Tripo 侧带模型输出的任务 id。
 
 本地资产既没有内置对象存储，也没有模型上传链路（Tripo `import_model` 未实现，
-见 #2），所以**本地生成的资产做低模重拓扑，用户必须自备公网直链**（如自有
-COS / OSS / 网盘直链）。mock 路径不需要 URL。
+见 #2），所以 **hunyuan / tripo 两路由**对本地资产仍有来源限制；**meshy 路由无此
+限制**（本地 GLB Data URI 直传）。mock 路径不需要 URL。
 
-**影响**：从本地资产出发的 Hunyuan 智能拓扑，缺 `sourceUrl` 时报
-`missing_source_url`；流程上比「生成→绑骨→动作」（Meshy 全程无需公网 URL）
-多一步外部上传。
+**影响**：
 
-**规避**：把源 GLB 传到自有公网存储拿直链再提交；或先用 Tripo 生成资产（拿
-`originalTaskId`）再走 Tripo 智能低模。
+- meshy 路由：从本地资产（或 Meshy 生成资产）出发可直接重拓扑，流程与
+  「生成→绑骨→动作」（Meshy 全程无需公网 URL）一致，无额外上传步骤；
+- hunyuan / tripo 路由：本地资产仍缺来源——Hunyuan 智能拓扑缺 `sourceUrl` 时报
+  `missing_source_url`；Tripo 智能低模仅限 Tripo 自身生成的资产。
+
+**规避**：走 `gen3d_retopo_lowpoly` 时优先 `provider=meshy`——本地任意 GLB 直接可走
+（Data URI 直传），Meshy 生成资产自动取 sidecar 的 `resultTaskId`（`originalTaskId`
+优先级最高）；用户已有公网源直链或 Tripo 生成任务时才考虑 hunyuan / tripo 路由。
 
 **后续计划**：Tripo `import_model` 落地后（#2），本地 GLB 可经上传链路直接走
-Tripo 智能低模；Hunyuan 侧受官方「公网 URL 输入」约束，仍需要用户自备直链，
-文档标注清楚。
+Tripo 智能低模，三家齐备（meshy 的 `input_task_id` / Data URI、tripo 的
+`import_model`、hunyuan 的公网 URL）；Hunyuan 侧受官方「公网 URL 输入」约束，
+仍需用户自备直链，文档标注清楚。
 
 ## 4. Rodin 无绑骨 / 动作 / 重拓扑，且 API 需 Business 订阅（$120/月）
 

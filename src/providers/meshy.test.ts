@@ -9,6 +9,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { isProviderError, type FetchLike } from './types.js'
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -109,35 +112,45 @@ describe('认证与配置', () => {
   })
 
   it('未配置 key：所有提交/轮询/余额方法抛 provider_not_configured，且不发请求', async () => {
-    delete process.env.MESHY_API_KEY
-    const fetchImpl: FetchLike = async () => {
-      throw new Error('不应发起任何请求')
+    // 隔离外部凭证层（$DSH_HOME 可能被宿主会话写入真实 key，测试须自包含）
+    const isolatedHome = mkdtempSync(join(tmpdir(), 'dsh-meshy-no-key-'))
+    const prevDshHome = process.env.DSH_HOME
+    process.env.DSH_HOME = isolatedHome
+    try {
+      delete process.env.MESHY_API_KEY
+      const fetchImpl: FetchLike = async () => {
+        throw new Error('不应发起任何请求')
+      }
+      const provider = new MeshyProvider({ fetchImpl })
+      expect(provider.isConfigured()).toBe(false)
+      await expect(provider.textTo3dPreview({ prompt: 'knight' })).rejects.toMatchObject({
+        code: 'provider_not_configured',
+      })
+      await expect(provider.textTo3dRefine({ previewTaskId: 'pv' })).rejects.toMatchObject({
+        code: 'provider_not_configured',
+      })
+      await expect(provider.imageTo3d({ imageUrl: 'https://x/y.png' })).rejects.toMatchObject({
+        code: 'provider_not_configured',
+      })
+      await expect(provider.multiImageTo3d({ imageUrls: ['https://x/a.png'] })).rejects.toMatchObject({
+        code: 'provider_not_configured',
+      })
+      await expect(provider.rigging({ modelUrl: 'https://x/c.glb' })).rejects.toMatchObject({
+        code: 'provider_not_configured',
+      })
+      await expect(provider.animations({ rigTaskId: 'r', actionId: 92 })).rejects.toMatchObject({
+        code: 'provider_not_configured',
+      })
+      await expect(provider.balance()).rejects.toMatchObject({ code: 'provider_not_configured' })
+      await expect(provider.pollTask(handle('any'))).rejects.toMatchObject({ code: 'provider_not_configured' })
+      await expect(provider.submitGeneration({ mode: 'text', prompt: 'knight' })).rejects.toMatchObject({
+        code: 'provider_not_configured',
+      })
+    } finally {
+      if (prevDshHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prevDshHome
+      rmSync(isolatedHome, { recursive: true, force: true })
     }
-    const provider = new MeshyProvider({ fetchImpl })
-    expect(provider.isConfigured()).toBe(false)
-    await expect(provider.textTo3dPreview({ prompt: 'knight' })).rejects.toMatchObject({
-      code: 'provider_not_configured',
-    })
-    await expect(provider.textTo3dRefine({ previewTaskId: 'pv' })).rejects.toMatchObject({
-      code: 'provider_not_configured',
-    })
-    await expect(provider.imageTo3d({ imageUrl: 'https://x/y.png' })).rejects.toMatchObject({
-      code: 'provider_not_configured',
-    })
-    await expect(provider.multiImageTo3d({ imageUrls: ['https://x/a.png'] })).rejects.toMatchObject({
-      code: 'provider_not_configured',
-    })
-    await expect(provider.rigging({ modelUrl: 'https://x/c.glb' })).rejects.toMatchObject({
-      code: 'provider_not_configured',
-    })
-    await expect(provider.animations({ rigTaskId: 'r', actionId: 92 })).rejects.toMatchObject({
-      code: 'provider_not_configured',
-    })
-    await expect(provider.balance()).rejects.toMatchObject({ code: 'provider_not_configured' })
-    await expect(provider.pollTask(handle('any'))).rejects.toMatchObject({ code: 'provider_not_configured' })
-    await expect(provider.submitGeneration({ mode: 'text', prompt: 'knight' })).rejects.toMatchObject({
-      code: 'provider_not_configured',
-    })
   })
 })
 
@@ -351,6 +364,65 @@ describe('提交：text-to-3d refine 字段过滤', () => {
       pose_mode: 'a-pose',
       model_type: 'standard',
     })
+  })
+
+  it('preview smart-topology 净化：强制 meshy-t2、剥离被忽略字段、非 triangle topology、面数钳 15,000', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      { test: /\/openapi\/v2\/text-to-3d$/, handler: () => jsonResp({ result: 'pv-s' }, 202) },
+    ])
+    const provider = new MeshyProvider({ fetchImpl })
+    await provider.submitGeneration({
+      mode: 'text',
+      prompt: 'knight',
+      providerOptions: {
+        model_type: 'smart-topology',
+        ai_model: 'meshy-7',
+        should_remesh: true,
+        decimation_mode: 1,
+        ultra_mode: true,
+        topology: 'quad',
+        target_polycount: 20_000,
+      },
+    })
+    const body = calls[0]?.body ?? {}
+    expect(body.model_type).toBe('smart-topology')
+    expect(body.ai_model).toBe('meshy-t2')
+    expect(body.target_polycount).toBe(15_000) // 官方 t2 上限 15,000
+    expect(body.should_remesh).toBeUndefined()
+    expect(body.decimation_mode).toBeUndefined()
+    expect(body.ultra_mode).toBeUndefined()
+    expect(body.topology).toBeUndefined()
+
+    // triangle 保留；字符串数字面数同样钳制；缺省 ai_model 强制 meshy-t2
+    await provider.submitGeneration({
+      mode: 'text',
+      prompt: 'knight',
+      providerOptions: { model_type: 'smart-topology', topology: 'triangle', target_polycount: '500' },
+    })
+    const body2 = calls[1]?.body ?? {}
+    expect(body2.ai_model).toBe('meshy-t2')
+    expect(body2.topology).toBe('triangle')
+    expect(body2.target_polycount).toBe(500)
+  })
+
+  it('preview standard 路径：面数钳 100–300,000（官方 remesh 情形范围）', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      { test: /\/openapi\/v2\/text-to-3d$/, handler: () => jsonResp({ result: 'pv-n' }, 202) },
+    ])
+    const provider = new MeshyProvider({ fetchImpl })
+    await provider.submitGeneration({
+      mode: 'text',
+      prompt: 'knight',
+      providerOptions: { model_type: 'standard', target_polycount: 500_000 },
+    })
+    const body = calls[0]?.body ?? {}
+    expect(body.target_polycount).toBe(300_000)
+    await provider.submitGeneration({
+      mode: 'text',
+      prompt: 'knight',
+      providerOptions: { model_type: 'standard', target_polycount: 50 },
+    })
+    expect(calls[1]?.body?.target_polycount).toBe(100)
   })
 })
 
@@ -967,5 +1039,122 @@ describe('rig 结果：basic_animations 解析与 expires_at', () => {
     expect(result.expiresAtMs).toBe(1_800_000_000_123)
     expect(result.basicAnimations).toBeUndefined()
     expect(result.downloads.glb).toBe('https://cdn.example.com/an.glb')
+  })
+})
+
+describe('提交：remesh（低模重拓扑）', () => {
+  it('input_task_id / model_url 二选一：缺省抛错；都传时 input_task_id 优先；data URI 原样透传', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      { test: /\/openapi\/v1\/remesh$/, handler: () => jsonResp({ result: 'rm-1' }, 202) },
+    ])
+    const provider = new MeshyProvider({ fetchImpl })
+    const h = await provider.submitRemesh({ modelUrl: 'https://example.com/m.glb' })
+    expect(h.taskId).toBe('rm-1')
+    expect(h.kind).toBe('remesh')
+    expect(calls[0]?.url).toBe(`${MESHY_BASE_URL}/openapi/v1/remesh`)
+    expect(calls[0]?.body).toMatchObject({ model_url: 'https://example.com/m.glb' })
+
+    // Data URI（MIME application/octet-stream）原样透传，provider 不校验前缀
+    await provider.submitRemesh({ modelUrl: 'data:application/octet-stream;base64,Z2xURg==' })
+    expect(calls[1]?.body?.model_url).toBe('data:application/octet-stream;base64,Z2xURg==')
+
+    // 两者都传：官方 input_task_id 优先，仅传优先项
+    await provider.submitRemesh({ inputTaskId: 't-9', modelUrl: 'https://x/c.glb' })
+    expect(calls[2]?.body).toMatchObject({ input_task_id: 't-9' })
+    expect(calls[2]?.body?.model_url).toBeUndefined()
+
+    // 两者皆缺：本地校验拒绝（不发起请求）
+    await expect(provider.submitRemesh({})).rejects.toMatchObject({ code: 'provider_bad_request' })
+  })
+
+  it('target_polycount 钳 100–300,000；decimation_mode 仅 1–4；同给时 target_polycount 被忽略', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      { test: /\/openapi\/v1\/remesh$/, handler: () => jsonResp({ result: 'rm-p' }, 202) },
+    ])
+    const provider = new MeshyProvider({ fetchImpl })
+    await provider.submitRemesh({ modelUrl: 'u', targetPolycount: 500_000 })
+    expect(calls[0]?.body?.target_polycount).toBe(300_000)
+    await provider.submitRemesh({ modelUrl: 'u', targetPolycount: 50 })
+    expect(calls[1]?.body?.target_polycount).toBe(100)
+
+    await provider.submitRemesh({ modelUrl: 'u', decimationMode: 3, targetPolycount: 200_000 })
+    expect(calls[2]?.body?.decimation_mode).toBe(3)
+    expect(calls[2]?.body?.target_polycount).toBeUndefined()
+
+    await expect(provider.submitRemesh({ modelUrl: 'u', decimationMode: 5 as never })).rejects.toMatchObject({
+      code: 'provider_bad_request',
+    })
+    await expect(provider.submitRemesh({ modelUrl: 'u', decimationMode: 0 as never })).rejects.toMatchObject({
+      code: 'provider_bad_request',
+    })
+  })
+
+  it('topology 枚举校验；target_formats 缺省由服务端默认（请求体不带键）', async () => {
+    const { fetchImpl, calls } = mockFetch([
+      { test: /\/openapi\/v1\/remesh$/, handler: () => jsonResp({ result: 'rm-t' }, 202) },
+    ])
+    const provider = new MeshyProvider({ fetchImpl })
+    await provider.submitRemesh({ modelUrl: 'u', topology: 'quad', targetFormats: ['glb', 'fbx'] })
+    expect(calls[0]?.body).toMatchObject({ topology: 'quad', target_formats: ['glb', 'fbx'] })
+
+    await provider.submitRemesh({ modelUrl: 'u' })
+    expect(calls[1]?.body?.topology).toBeUndefined()
+    expect(calls[1]?.body?.target_formats).toBeUndefined()
+
+    await expect(provider.submitRemesh({ modelUrl: 'u', topology: 'n-gon' as never })).rejects.toMatchObject({
+      code: 'provider_bad_request',
+    })
+  })
+})
+
+describe('remesh 轮询与下载（role 映射）', () => {
+  it('model_urls 七格式 + thumbnail/alpha_thumbnail → files 与 downloads 投影', async () => {
+    const TASK = 'rm-done-1'
+    const remeshTask = {
+      id: TASK,
+      type: 'remesh',
+      status: 'SUCCEEDED',
+      progress: 100,
+      consumed_credits: 5,
+      model_urls: {
+        glb: 'https://cdn.example.com/r.glb',
+        fbx: 'https://cdn.example.com/r.fbx',
+        obj: 'https://cdn.example.com/r.obj',
+        usdz: 'https://cdn.example.com/r.usdz',
+        blend: 'https://cdn.example.com/r.blend',
+        stl: 'https://cdn.example.com/r.stl',
+        '3mf': 'https://cdn.example.com/r.3mf',
+      },
+      thumbnail_url: 'https://cdn.example.com/r.png',
+      alpha_thumbnail_url: 'https://cdn.example.com/r-alpha.png',
+    }
+    const { fetchImpl } = mockFetch([
+      { test: /\/openapi\/v1\/remesh\/rm-done-1$/, handler: () => jsonResp(remeshTask) },
+      {
+        test: /^https:\/\/cdn\.example\.com\//,
+        handler: (url) => (url.endsWith('.glb') ? bytesResp(GLB_BYTES) : bytesResp(PNG_BYTES)),
+      },
+    ])
+    const provider = new MeshyProvider({ fetchImpl, sleep: async () => {} })
+    const result = await provider.pollTask(handle(TASK, 'remesh'), { intervalMs: 0 })
+    expect(result.status).toBe('succeeded')
+    expect(result.kind).toBe('remesh')
+    expect(result.files.map((f) => f.role)).toEqual([
+      'glb',
+      'fbx',
+      'obj',
+      'usdz',
+      'blend',
+      'stl',
+      '3mf',
+      'thumbnail',
+      'alpha_thumbnail',
+    ])
+    expect(result.files[0]?.format).toBe('glb')
+    expect(result.consumedCredits).toBe(5)
+    expect(result.downloads.glb).toBe('https://cdn.example.com/r.glb')
+    expect(result.downloads.fbx).toBe('https://cdn.example.com/r.fbx')
+    expect(result.downloads.previewImage).toBe('https://cdn.example.com/r.png')
+    expect(result.downloads.textureUrls).toBeUndefined()
   })
 })
