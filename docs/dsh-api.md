@@ -8,6 +8,17 @@
 > 2026-08-20 追加：本机 npm 全局 `dsh@0.1.0-rc.8`，registry 上
 > `@deepseek-ai/dsh-tools / dsh-jobs / dsh-skill` 同为 `0.1.0-rc.8`，插件面 API
 > 无 breaking change；rc.6 实测记录保留为历史，见第 8 节新增条目 5。
+>
+> 2026-08-24 追加：本机 npm 全局 `dsh@0.1.1-rc.2`。官方 changelog（rc.8 →
+> 0.1.1-rc.2）仅含 DeepSeek 适配器改动（图片改走 Files API、新增视觉模型
+> `DeepSeek-V4-Flash-Vision-Exp`、图片预处理自动缩放）与 UI / 沙箱修复，
+> **插件面 API 无 breaking change**。**registry 陷阱**：`@deepseek-ai/*` 子包的
+> `latest` dist-tag 错指 `0.0.1-rc.3`，真实最新挂在 `next` 标签——升级依赖必须
+> 显式钉版本号，不可用 `@latest`。四宿主服务依赖已按 rc.2 对齐：
+> `dsh-jobs / dsh-settings / dsh-skill / dsh-tools` 改走 peerDependencies
+> （`^0.1.0-rc.8`）+ devDependencies 钉 `0.1.1-rc.2`（同 host 闭包），
+> `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 已并入 rc.2 条目
+> （过程与修复后无头 E2E 证据见第 8 节条目 6）。
 
 ---
 
@@ -359,6 +370,7 @@ await ctx.credentials.unset(ref)                  // 缺席时 no-op；同遮蔽
 | `$DSH_HOME/.env` | `user-env` | 此处不可写 | 否则 |
 
 - 文档格式：仅一个 YAML 映射（`MESHY_API_KEY: sk-…`），无版本字段无包裹层；目录 `0700`、文档 `0600`；任何偏离（非映射根、非 POSIX 标识符键、非字符串值、空串、重复键、坏 YAML）都失败并响亮报错（`credentials-local/README.md:31-46`）。
+- ⚠ rc.2 起对齐：本机 `dsh@0.1.1-rc.2` 部署侧的 `credentials-local` **文档已是版本化格式（`version: 1` + `refs:` 包裹）**，与上条 `<repo>` 快照描述不同；dsh-gen3d 的自实现解析器（`src/config.ts`）**不读 `refs:` 下的键**（需迁移到 §4.4 的 `ctx.credentials.resolve(credentialRef(...))` 才能复用 host 通道）——插件 key 的推荐配置见 `docs/CREDENTIALS.md`（§3.1 警示、§3.2/§3.3）。
 - 安全边界：文档同 OS 用户可读（工具进程以同用户运行）——"模型不可读"不是文件权限能保证的；DSH 能做到的是不给模型文档路径、不把值装入进程环境（`credentials-local/README.md:52-56`）。
 
 ### 4.4 dsh-gen3d 推荐代码写法
@@ -440,7 +452,7 @@ const jobId = ctx.jobs.start({          // 返回 JobId（branded string，如 '
 // 后台分支返回类型化规范句柄，如 { kind: 'background', jobId }
 ```
 
-要点：后台分支返回结构化句柄（Code Mode 绝不解析 prose 里的 id）；注册表拒绝预中止的调用；`run()` 开始前运行时校验 owner 与控制器可用性；工具面控制工具 `job_kill`/`job_list`/`job_read` 由 `dsh-tool-jobs` 提供（`capability-seams.md:459`）。
+要点：后台分支返回结构化句柄（Code Mode 绝不解析 prose 里的 id）；注册表拒绝预中止的调用；`run()` 开始前运行时校验 owner 与控制器可用性；工具面控制工具 `job_kill`/`job_list`/`job_output` 由 `dsh-tool-jobs` 提供（`capability-seams.md:459`）。
 
 ### 5.4 取消语义（重要）
 
@@ -627,16 +639,27 @@ dsh --profile demo
 3. **陷阱（link 安装不解析依赖）**：`dsh plugin add ./目录`（pnpm `link:` 安装）时，插件包自身的 `dependencies` **不会**被 pnpm 解析安装，ESM import `@deepseek-ai/dsh-tools` 报 `ERR_MODULE_NOT_FOUND`；先 `npm pack` 再 `dsh plugin add ./xxx.tgz` 则依赖正确 hoist 到 profile `node_modules`（实测通过）。**分发必须用 tarball 或 registry，不要用目录链接。**（2026-08-14 补充：`dsh-gen3d` 已随包提供自包含 `prepare` 脚本 `tsc -p tsconfig.build.json`，git 安装路径在 profile 侧配置 `allowBuilds` 后亦可用；registry 仍是唯一推荐分发方式。）
 4. 清理：`dsh plugin remove` + 删除测试 profile 目录。
 5. **2026-08-20 对齐 rc.8**：本机 npm 全局 `dsh@0.1.0-rc.8`（`npm i -g @deepseek-ai/dsh@0.1.0-rc.8`，先经 `which dsh` / `npm ls -g --depth=0` 确认原为 rc.6）；`@deepseek-ai/cordis` npm 最新仍为 `4.0.1`，未改动。`dsh-gen3d` 三依赖（dsh-tools / dsh-jobs / dsh-skill）升 `0.1.0-rc.8` 后 `pnpm build` 通过、338 测试全绿，类型无漂移、无需代码适配；`pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 由 pnpm 自动并入 rc.8 条目。冒烟：`pnpm pack` → `dsh plugin --profile gen3d-smoke add ./dsh-gen3d-0.1.0.tgz` → `--dump-config` 出现 `# == dsh-gen3d` 层（行 314-316）→ 临时 headless profile（bundles 含 dsh-base + dsh-headless + dsh-gen3d）跑一次性提示词，实际调用 `gen3d_provider_status` / `gen3d_credentials_status`：四家供应商均 `configured: false`、`mode: mock`，回退确定性 mock 且零费用；全程无 `ERR_MODULE_NOT_FOUND` 类依赖问题。清理：`dsh plugin remove` + 删除测试 profile（gen3d-smoke 与临时 headless profile）+ 删除 tarball。
+6. **2026-08-24 对齐 0.1.1-rc.2 + 无头 E2E 两个真 bug 修复**：本机 npm 全局 `dsh@0.1.1-rc.2`，官方 changelog 插件面无 breaking change，但 rc.2 无头冒烟暴露两个真实问题（mock 链路即可触发）——
+   - **问题 1（jobs inject 缺失）**：长任务路径 `ctx.jobs.start` 被 Cordis 注入守卫拦下：`Error: cannot get property "jobs" without inject`。根因：`src/index.ts` 的 `inject` 只声明了 `['tools','credentials','skills']`，漏了 `jobs`。修复：补 `'jobs'`（jobs 由 dsh-jobs-local 提供；tools / credentials / skills 由 dsh-base 恒提供），`src/index.test.ts` 的 inject 断言与用例名同步更新。
+   - **问题 2（宿主服务包双实例 Symbol 漂移）**：`dependencies` 里的 dsh-tools / dsh-jobs / dsh-skill / dsh-settings（0.1.0-rc.8）被 `dsh plugin add` 装进 profile 的 `node_modules`，遮蔽 fallback 池（`~/.dsh/profiles/node_modules`）里 host 闭包的 0.1.1-rc.2 单实例——dsh-tools 的 `TOOL_RUNTIME_SCHEDULER` 等 Symbol 跨实例不一致，agent-loop 调任何工具都炸 `Cannot read properties of undefined (reading 'prepare')`。修复：4 包挪到 **peerDependencies**（`^0.1.0-rc.8`，与 client 双声明风格对齐）+ **devDependencies 钉 `0.1.1-rc.2`**（与 host 闭包对齐，供本地开发/测试）；profile 侧 `autoInstallPeers: false` → peer 不落 profile node_modules，运行期上溯 fallback 池单实例。连带发现：pnpm 对**混合 rc.8 / rc.2 基线**的 peer 区间做交叠解析会炸（样例：`@deepseek-ai/dsh-llm@>=0.1.1 <0.2.0-0` 无匹配，pnpm 把 `^0.1.1-rc.2` 下界提升为稳定版后任何已发布 pre-release 都不满足）——因此 client 系列 devDeps 也一并升 `0.1.1-rc.2`（`next` 标签有发布，见本文件头注）；`pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 按既有条目模式并入 rc.2（本机无 `minimumReleaseAge` 实际值，属惯例维护）。
+   - **修复后验证**：`pnpm vitest run` 362 全绿、`tsc -p tsconfig.build.json --noEmit` 零错误、`pnpm build` 通过。E2E：`pnpm pack` → `dsh plugin --profile gen3d-e2e add ./dsh-gen3d-0.1.1.tgz` → profile `node_modules` 内**无 4 包任何副本**（只剩 cordis/cosmokit/schemastery 等真 dependencies）→ `--dump-config` 出现 `# == dsh-gen3d` 层 → 全新工作区一次性运行 `gen3d_provider_status` / `gen3d_credentials_status`：四家 `configured: false`、`mode: mock`，**全程无 `reading 'prepare'` 报错** → mock 生成端到端 `gen3d_text_to_3d`（meshy，真实工具+长任务 jobs 路径）：工具成功、`usedMock: true`、`cacheHit: false`、GLB 落盘（`xxd -l4` = `glTF` magic）、sidecar `custom.providerMode: "mock"`、`audit.jsonl` 出现**真实 submit 事件**（全新工作区，非 cache_hit）。清理：`dsh plugin remove` + 删除测试 profile（gen3d-e2e）+ 删除 tarball + 删除本次一次性会话目录。
+7. **2026-08-24 双形态 E2E（软渲染预览管线 + web 视窗）**：rc.2 下验证 `gen3d_render_preview` / `gen3d_inspect_asset` 两条新工具与 web 端 `conversation.view` 页签 / keyed 工具卡片（无头 + web 双形态；全程 mock，无 key，未触发审批）。
+   - **Blocker 级 bug（gifenc ESM 互操作）**：`pnpm pack` → `dsh plugin add` → 无头启动即崩：`Named export 'GIFEncoder' not found. The requested module 'gifenc' is a CommonJS module`（`lib/render/encode.js:10` 具名导入；单测 420 全绿未拦截）。根因：gifenc 的 package.json **无 exports 字段**——Node ESM 解析 `main`（CJS dist，esbuild `__export` 的 getter 导出不被 cjs-module-lexer 识别 → namespace 只有 `default`）；vite/vitest 却解析 `module` 字段（ESM dist，具名导出直挂 namespace，`default` 反而是 GIFEncoder 函数）。修复：`src/render/encode.ts` 改命名空间导入 + 按形状二选一（namespace 上有 `GIFEncoder` 用 namespace，否则取 `ns.default`），`src/render/vendor.d.ts` 注释同步；修复后 420 单测全绿，且 `node` 直跑 `encodePng`/`encodeGif` 输出 PNG/GIF magic 正常。教训：**纯 ESM 宿主的加载互操作必须按 Node 解析路径实证，vitest 全绿不代表宿主能加载**。另注：`dsh plugin --profile <新名> --help` 会**自动初始化空 profile**（bundles 只有 dsh-base）——查帮助 / 建 profile 的先后会互相干扰。
+   - **无头 E2E**：`dsh plugin --profile gen3d-e2e add ./dsh-gen3d-0.1.1.tgz` → `--dump-config` 出现 `# == dsh-gen3d` 层（profile node_modules 无 4 个宿主包副本）→ `GEN3D_WORKSPACE_ROOT=/tmp/gen3d-e2e dsh --profile gen3d-e2e '<串行三连提示词>'` 一次性运行：agent 依次 `gen3d_text_to_3d`（meshy，prompt「a small orange fox robot, full body, a-pose」，返回 background `jobId=gen3d-1`）→ `job_output {job_id, wait:true}` 轮询至完成（`usedMock: true`、`cacheHit: false`、`assetPath` 齐全）→ `gen3d_inspect_asset`（`budget=hero-character`：558 顶点 / **1032 三角形**、`passed=true`）→ `gen3d_render_preview`（`angles=8`、`size=512`：text 块 + **2 个 image attachment 块** + 落盘 `.dsh-gen3d/previews/<stem>-contact.png`（PNG 4096×512）与 `<stem>-turntable.gif`（GIF89a 512×512））。工件核对：GLB 20,588B 且 `glTF` magic、sidecar `providerMode: "mock"`（`faceCount` = 请求目标面数 30000，实际几何 1032 面）、`audit.jsonl` 含**真实 submit 事件**（全新工作区、非 cache_hit）；会话日志 0 处 `reading 'prepare'` / `without inject` / webServer 相关报错（headless 无该服务，ctx.get 防御静默跳过）。
+   - **web E2E**：`dsh --profile gen3d-web --no-open --port 0`（注意：`dsh web` 子命令**不接受前置 `--profile`**；端口从 stdout `dsh web: http://127.0.0.1:<port>` 取）。浏览器加载 `client.js?rev=…`（1.58MB）→ 会话视图 keyed 页签条「对话 / 轨迹 / **3D 资产**」→ 资产列表出现预置角色（characters 槽）→ 选中后 web 视窗（three.js）渲染出 mock 角色，顶栏显示「1,032 面」，canvas 区域像素方差 965（stddev 31，非纯背景）→ console **0 error**（仅 1 条 three `PCFSoftShadowMap deprecated` 警告，可容忍）。路由验证表：`GET /plugins/dsh-gen3d/api/assets` → 200 `application/json`（含 `faceCount`/`previews` 字段）；`GET /plugins/dsh-gen3d/files/assets/3d/characters/<name>.glb` → 200 `model/gltf-binary`；`GET /plugins/dsh-gen3d/client.js` → 200 `text/javascript`；穿越 `../` → 404、`%2e%2e%2f` / `..%2f` → 400；缺失资产 → 404。web 会话内发消息让 agent 跑 `gen3d_render_preview`（mock，未触发审批）：工具执行 + 最终答复带两条预览路径。
+   - **发现（非 blocker，仅记录未修复）**：keyed 工具卡片 `RenderPreviewCard` 未展示预览图——工具侧 `output.render` 输出的是纯 prose 文本块（text 自足供 text-only 模型读），而 `src/client/tool-cards-model.ts` 按「text 块 = 规范值 JSON」摄取（`canonicalValue` → `JSON.parse` 失败 → null → `previewPathOf` 取不到 `previewPng`），卡片落到 `GenericRow` 通用行（槽命中可由行头「gen3d_render_preview」确认）。建议后续：preview / inspect 的 render 首块保留 `JSON.stringify(value)` 前缀，或卡片从 image attachment 块反取路径。
+   - **presentationMeta 复验（2026-08-24，上述「发现」修复后的 web E2E）**：修复已落地——preview / inspect 的 `output.render` 维持 prose（text-only 模型自足），结构化展示数据改经 `output.presentationMeta` 写入 `tool/result.meta`（`src/tools/preview.ts:196`、`src/tools/inspect.ts:235`），web 侧 `metaOf(result.meta)` 与 `canonicalValue` 二选一补位（`src/client/tool-cards-model.ts:89`、`src/client/tool-cards.tsx:138`），`previewPathOf` 即可取到 `previewPng`。复验过程：全新 web profile（gen3d-web2，port 0）+ tmp mock 工作区（先用临时 headless profile 一次性生成 `tiny-blue-wizard-robot`）→ web 会话发消息「请调用 gen3d_render_preview 工具，asset 用刚生成的角色，angles 4，size 512」，agent 先 `gen3d_list_assets` 定位再调工具（mock，无审批）→ **keyed 卡片渲染出预览图**：`<img src="/plugins/dsh-gen3d/files/.dsh-gen3d/previews/tiny-blue-wizard-robot-contact.png">`，DOM `naturalWidth=2048` / `naturalHeight=512` / `complete=true`（4 视角 × 512px 拼板，与 angles 4 / size 512 吻合），卡片头「完成 / 渲染预览」+ 事实行（预览图路径、对应资产 + 打开文件按钮），**不再是 GenericRow 通用行**。回归：会话页签「对话 / 轨迹 / 3D 资产」仍在；console **0 error**（仅既有 three `PCFSoftShadowMap deprecated` 警告 ×2，与条目 7 前次一致）。证据截图：`/tmp/gen3d-card-proof.png`（视口，卡片全貌 + img 可见）。注：复验中途会话视图曾自动回到欢迎屏（会话树仍保留该会话条目），重进会话后 DOM 复验一致——卡片 img 由会话历史重放渲染，幂等。
+   - 清理：`dsh plugin remove` ×2 + 删除两个测试 profile 目录 + `/tmp` 工作区与 tarball + 仅本次的会话目录；既有 headless/web profile、`~/.dsh/.credentials.yaml`、`settings.yaml` 均未动。
 
 ---
 
 ## 9. dsh-gen3d 落地要点（结论清单）
 
-1. 包形态：`dsh.bundle.patch` + `cordis.patch.yml` 单行 `insert`；依赖走 registry 版本并随宿主 dsh 版本核对；分发用 `npm pack` tarball。
-2. 25 个 `gen3d:*` 工具全部用 `defineTool` 重写：`parameters` 用 DSL（含 `enum`/`oneOf` 表达 Mesh 类型、贴图分辨率等枚举），`output.schema` 声明规范值（含失败原因的结构化表达），`output.render` 输出模型 prose。
+1. 包形态：`dsh.bundle.patch` + `cordis.patch.yml` 单行 `insert`；宿主服务包（dsh-tools / dsh-jobs / dsh-skill / dsh-settings）走 **peerDependencies + devDependencies**（dev 钉与宿主一致的版本，供本地开发/测试）——刻意不进 dependencies，避免 `dsh plugin add` 把它们装进 profile 的 node_modules、遮蔽宿主闭包形成**双实例 Symbol 漂移**（dsh-tools 的 TOOL_RUNTIME_SCHEDULER 等跨实例不一致，agent-loop 调任何工具即炸，见第 8 节条目 6）；分发用 `npm pack` tarball。
+2. 21 个 `gen3d:*` 工具全部用 `defineTool` 重写（与 `src/tools/index.ts` 一致：11 生成 + 3 动作 + 5 playable + 2 资产工具）：`parameters` 用 DSL（含 `enum`/`oneOf` 表达 Mesh 类型、贴图分辨率等枚举），`output.schema` 声明规范值（含失败原因的结构化表达），`output.render` 输出模型 prose。
 3. 计费工具（文生3D/图生3D/多视图/精修/绑骨等）在 `tools/pre-execute` 统一返回 `{ kind: 'ask', reason }`；默认组合自带 `dsh-user-approval`（policy `ask`），无审批通道时自动 fail-closed。
-4. 密钥：`inject: ['credentials']`，每次操作 `resolve(credentialRef('MESHY_API_KEY'|'HUNYUAN3D_API_KEY'))`，`undefined` → 确定性 mock 回退；用户写入 `$DSH_HOME/.credentials.yaml` 或环境变量，插件零内置。
-5. 长任务（Meshy 两阶段精修等）：`ctx.jobs.start({ kind: 'gen3d', owner: exec.agent, ... })` + `declare module '@deepseek-ai/dsh-jobs'` 扩展 `JobKindMap`（无 `./types` 子路径，见 5.2 节）；返回 `{ kind: 'background', jobId }` 结构句柄。
+4. 密钥：`inject: ['credentials']`，每次操作 `resolve(credentialRef('MESHY_API_KEY'|'HUNYUAN3D_API_KEY'))`，`undefined` → 确定性 mock 回退；用户写入 `$DSH_HOME/.credentials.yaml` 或环境变量，插件零内置（⚠ rc.2+ 主机上 `.credentials.yaml` 由 host 接管为版本化格式，见 §4.3 注与 `docs/CREDENTIALS.md`）。
+5. 长任务（Meshy 两阶段精修等）：`ctx.jobs.start({ kind: 'gen3d', owner: exec.agent, ... })` + `declare module '@deepseek-ai/dsh-jobs'` 扩展 `JobKindMap`（无 `./types` 子路径，见 5.2 节）；返回 `{ kind: 'background', jobId }` 结构句柄。**用 `ctx.jobs` 必须在 inject 声明 `jobs`**（jobs 由 dsh-jobs-local 提供；漏声明即被 Cordis 注入守卫拦截 `cannot get property "jobs" without inject`）。
 6. skill：包内 `skills/generate-3d-character/SKILL.md`（kebab-case 名 + name/description frontmatter），在 `apply` 里用 `ctx.skills.registerProvider()` 自注册随包 provider（第 6.3 节方式 2，`import.meta.url` 只在插件模块内合法，patch 的 `!!js` 求值环境没有它）。
 7. 工具卡片：`presentCall` 用 `generic` 卡片 + `locations`（写出的 GLB 路径）；`presentResult` 用 `generic`（附结果摘要）或 `diff`（生成的 playable.json）。
 

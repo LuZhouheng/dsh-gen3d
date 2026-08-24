@@ -64,7 +64,7 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 
 ## 功能
 
-19 个 DSH 工具（`src/tools/`，`allGen3dTools`），分四组：
+21 个 DSH 工具（`src/tools/`，`allGen3dTools`），分五组：
 
 **生成（11 个）**
 
@@ -100,6 +100,13 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 | `gen3d_export_playable_character` | 导出可玩角色：动作合并输出 `merged.glb` + `playable.json` |
 | `gen3d_adopt_playable_character` | 采纳交付物：孤儿 `merged.glb` 补 clip 映射与交付快照 |
 
+**资产（2 个）**
+
+| 工具 | 说明 |
+| --- | --- |
+| `gen3d_inspect_asset` | 资产体检：对照预算档（hero-character / prop / environment）检查面数、贴图、材质三科 |
+| `gen3d_render_preview` | 视口预览：纯 JS 软渲染出 PNG/GIF 预览并落盘；web 会话「3D 资产」页签可交互查看 |
+
 一句话产线：**生成 → 评分 → 命名 →（要会动才）绑骨 → 套动作 → 导出**；静态优先、会动 opt-in（按次计费）。注：legacy 的 `pose-standardization`（A/T-pose 标准化）**暂缓未迁移**——官方无独立等价 API，详见[已知缺口](#已知缺口)。
 
 ### 供应商能力矩阵
@@ -126,7 +133,7 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 
 ## 已知缺口
 
-当前实现的已知能力边界（九条，每条含**影响 / 规避方式 / 后续计划**）见 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md)。要点速览：
+当前实现的已知能力边界（十三条，每条含**影响 / 规避方式 / 后续计划**）见 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md)。要点速览：
 
 - **Hunyuan 套动作**：`apply-motion` 的 Hunyuan 路由暂不可用——官方 48 预设动作目前只能绑骨时经 `motionType` 顺带，独立套动作待挂接 `SubmitHunyuanTo3DMotionJob`
 - **Tripo 绑骨**：仅限 Tripo 自身生成的资产；外部 GLB 的 `import_model` 导入链路未实现
@@ -180,7 +187,7 @@ dsh-gen3d/
 │   ├── storage.ts        # Gen3dStore 资产落盘 / 缓存 / 审计 / 锁
 │   ├── client/           # 设置卡片浏览器半边（注册 / 控制器 / 组件）
 │   └── providers/        # 四家官方 API 直连（types 契约 + meshy / hunyuan3d / tripo3d / rodin）
-├── skills/               # 随包分发的 agent 技能
+├── skills/               # 随包分发的 agent 技能（generate-3d-character / game-3d-assets）
 └── docs/
     ├── KNOWN-GAPS.md     # 已知能力缺口（影响 / 规避 / 后续计划）
     ├── CREDENTIALS.md    # 凭证安全配置详细指南

@@ -9,14 +9,18 @@ import type { Gen3dToolDefinition } from './common.js';
 import { generationTools } from './generation.js';
 import { animationTools } from './animation.js';
 import { playableTools } from './playable.js';
+import { gen3dRenderPreview } from './preview.js';
+import { gen3dInspectAsset } from './inspect.js';
 
-/** 全部 gen3d 工具定义（19 个）。 */
+/** 全部 gen3d 工具定义（21 个）。 */
 export const allGen3dTools: readonly Gen3dToolDefinition[] = [
   ...generationTools, // 11：provider_status / credentials_status / list_assets / delete_asset /
   // text_to_3d / image_to_3d / views_to_3d / refine_mesh / retopo_lowpoly / rename_asset / score_quality
   ...animationTools, // 3：auto_rig / apply_motion / list_motions
   ...playableTools, // 5：get/set_playable_profile / set_playable_motion_mapping /
   // export_playable_character / adopt_playable_character
+  gen3dRenderPreview, // 1：render_preview（本地渲染，零配额）
+  gen3dInspectAsset, // 1：inspect_asset（本地体检，零配额）
 ];
 
 /** 计费工具名集合（审批 gate 可直接按名字过滤；等价于遍历 billing 元信息）。 */

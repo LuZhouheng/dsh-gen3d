@@ -9,6 +9,7 @@ description: 从一句需求或一张参考图生成一个带贴图、游戏可�
 
 - 用户要一个 3D **角色**资产（人形 / 生物），文生 / 图生 / 多视图都行
 - 已有一个静态角色，用户明确说「让它动起来」（走 / 跑 / 挥手）要绑骨 + 套动作
+- 角色要进**游戏管线**（引擎 / 预算档 / playable 动作导出等生产规范）时，走 [game-3d-assets](../game-3d-assets/SKILL.md)——本技能是轻量静态角色流程
 - 不要用它做道具 / 小物件（那是别的 2D/道具工具）或程序化 CAD
 
 ## Procedure
@@ -17,7 +18,7 @@ description: 从一句需求或一张参考图生成一个带贴图、游戏可�
 
 1. **确认前置**：先确认当前 DSH 工作区（产物落 `assets/3d/` 下，工具调用无需额外传项目标识）。先 `gen3d_provider_status` 看 provider 能力 / 配置（未配 key 会显示回退 mock）。
 2. **生成静态角色**：`gen3d_text_to_3d` / `gen3d_image_to_3d` / `gen3d_views_to_3d`（默认 provider = Meshy，可切 Hunyuan3D / Tripo3D / Rodin）。输入图尽量用已摆好 A/T-pose 的全身参考图；Meshy 文生想加贴图用 `gen3d_refine_mesh`。
-3. **评分**：`gen3d_score_quality` 跑客观五维（geometry / topology / texture / pbr / prompt_fidelity），判断要不要重生成或换 provider。
+3. **生成后自检**：`gen3d_inspect_asset` 对照预算档（面数 / 贴图 / 材质三科）→ `gen3d_render_preview` 渲染检查（web 会话「3D 资产」页签可交互查看，CLI 用户拿预览文件路径）→ `gen3d_score_quality` 跑客观五维（geometry / topology / texture / pbr / prompt_fidelity），判断要不要重生成或换 provider。
 4. **命名 + 交付**：`gen3d_rename_asset` 给清晰显示名（只改显示名不动磁盘），把静态角色的资产路径回报给用户。
 5. **交付时主动补一句（必做）**：告诉用户「这个角色现在是静态的；想让它**会动**（走 / 跑 / 挥手）我可以帮它绑骨 + 加动作，但要花一点配额——需要就说一声」。
 6. **仅当用户明确要会动**（仅人形 `characters` 槽）：`gen3d_auto_rig` 绑骨（保贴图、置位 `readiness.rigged`）→ `gen3d_list_motions`（按 `query`/`category`/`rigType` 收窄）挑动作 → `gen3d_apply_motion`（一次一个动作，按动作幂等）。
