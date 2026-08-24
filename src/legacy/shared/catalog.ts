@@ -7,12 +7,8 @@
 
 export type Exposure = 'planned' | 'mock-first' | 'experimental' | 'hidden' | 'blocked';
 
-import type {
-  FileFormat,
-  FileRole,
-  GenerationMode,
-  ProviderId,
-} from './manifest.js';
+import { buildMockCharacterGlb } from './mock-mesh.js';
+import type { FileFormat, FileRole, GenerationMode, ProviderId } from './manifest.js';
 
 export interface ProviderCapability {
   providerId: ProviderId;
@@ -261,16 +257,12 @@ export function generateMeshyTextMockResult(args: MeshyTextMockArgs): {
   };
 }
 
-// Minimal valid-ish GLB header (magic "glTF" + version 2) padded with a
-// deterministic tail. Not a renderable model — a stand-in byte payload so the
-// store/manifest path runs end-to-end without a provider call.
+// Deterministic real-geometry mock GLB. A minimal stand-in character (ellipsoid
+// body + sphere head + cylinder limbs) with deterministic baseColorFactor from
+// the cacheKey hash — renderable by src/render/soft-renderer.ts and inspectable
+// by gen3d_inspect_asset (1–3k tris).
 function mockGlbBytes(seed: string): Uint8Array {
-  const header = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00]);
-  const tail = new TextEncoder().encode(`mock-glb:${seed}`);
-  const out = new Uint8Array(header.length + tail.length);
-  out.set(header, 0);
-  out.set(tail, header.length);
-  return out;
+  return buildMockCharacterGlb(seed);
 }
 
 // 1x1 transparent PNG.

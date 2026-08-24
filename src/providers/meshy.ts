@@ -1,7 +1,8 @@
 /**
  * Meshy 官方 API 直连实现（DSH 迁移）。
  *
- * 事实来源：docs/providers/meshy-api.md（2026-08-13 抓取 docs.meshy.ai 官方文档）。
+ * 事实来源：docs/providers/meshy-api.md（2026-08-24 抓取 docs.meshy.ai 官方文档）；
+ * remesh 端点另见官方 https://docs.meshy.ai/zh/api/remesh（2026-08-24）。
  * 约定：
  * - 认证：`Authorization: Bearer <MESHY_API_KEY>`，统一经 src/config.ts 的
  *   readProviderKey('meshy') 读取，不直接读 process.env；
@@ -87,6 +88,7 @@ export type MeshyTaskKind =
   | 'multi-image-to-3d'
   | 'rig'
   | 'animate'
+  | 'remesh'
 
 export interface MeshyTaskHandle {
   readonly provider: 'meshy'
@@ -157,9 +159,16 @@ export interface MeshyTaskResult {
 export interface MeshyTextPreviewInput {
   /** 物体描述，必填，最长 600 字符 */
   prompt: string
-  /** standard（默认，高细节）/ lowpoly（低模；选 lowpoly 时 ai_model/topology/target_polycount/should_remesh 被官方忽略） */
+  /**
+   * standard（默认，高细节）/ smart-topology（meshy-t2）/ lowpoly（已废弃）。
+   * 遗留注释：官方参数表中的 decimation_mode / topology / origin_at 等现行字段
+   * 未在本结构逐一声明，可经 submitGeneration 的 providerOptions（snake_case）
+   * 透传，由 submitGeneration 的 preview 净化统一约束（smart-topology 时
+   * should_remesh/decimation_mode/ultra_mode 被官方忽略、仅接受 triangle、面数
+   * 100–15,000；standard 面数钳 100–300,000）。
+   */
   modelType?: 'standard' | 'lowpoly'
-  /** meshy-5 / meshy-6 / latest（默认 latest = Meshy 6） */
+  /** meshy-5 / meshy-6 / meshy-7 / latest（默认 latest = Meshy 7；2026-08 官方 changelog） */
   aiModel?: string
   shouldRemesh?: boolean
   /** 目标面数（1,000–300,000，越界钳制） */
@@ -187,7 +196,7 @@ export interface MeshyTextRefineInput {
   /** 与 preview 的模型不兼容会 400（官方失败模式） */
   aiModel?: string
   moderation?: boolean
-  /** 仅 meshy-6/latest；去掉基础色贴图上的高光阴影 */
+  /** 仅 meshy-6 生效；meshy-7/latest 接受但忽略（2026-08 官方 changelog）；去掉基础色贴图上的高光阴影 */
   removeLighting?: boolean
   targetFormats?: readonly string[]
   alphaThumbnail?: boolean
@@ -260,6 +269,22 @@ export interface MeshyAnimateInput {
   postProcess?: MeshyAnimatePostProcess
 }
 
+/** 低模重拓扑 remesh（POST /openapi/v1/remesh；2026-08-24 官方页） */
+export interface MeshyRemeshInput {
+  /** SUCCEEDED 的 text-to-3d-preview/refine、image-to-3d、retexture 任务 id；与 modelUrl 二选一，都传时官方 input_task_id 优先 */
+  inputTaskId?: string
+  /** 外部模型：.glb/.gltf/.obj/.fbx/.stl，公网 URL 或 Data URI（MIME application/octet-stream） */
+  modelUrl?: string
+  /** 输出格式，默认 ['glb']（glb/fbx/obj/usdz/blend/stl/3mf） */
+  targetFormats?: readonly string[]
+  /** 输出拓扑，默认 triangle（quad / triangle） */
+  topology?: 'quad' | 'triangle'
+  /** 目标面数 100–300,000（默认 30,000）；与 decimationMode 同给时前者被忽略 */
+  targetPolycount?: number
+  /** 减面档位 1–4（1 ultra / 2 high / 3 medium / 4 low）；设置后 targetPolycount 被忽略 */
+  decimationMode?: 1 | 2 | 3 | 4
+}
+
 export interface MeshyProviderDeps {
   /** HTTP 传输注入（默认 resolveFetchImpl 的原生 fetch）；单测一律 mock 此实现 */
   fetchImpl?: FetchLike
@@ -280,6 +305,7 @@ const SUBMIT_PATHS: Record<MeshyTaskKind, string> = {
   'multi-image-to-3d': '/openapi/v1/multi-image-to-3d',
   rig: '/openapi/v1/rigging',
   animate: '/openapi/v1/animations',
+  remesh: '/openapi/v1/remesh',
 }
 
 const TASK_PATHS: Record<MeshyTaskKind, string> = {
@@ -289,6 +315,7 @@ const TASK_PATHS: Record<MeshyTaskKind, string> = {
   'multi-image-to-3d': '/openapi/v1/multi-image-to-3d/',
   rig: '/openapi/v1/rigging/',
   animate: '/openapi/v1/animations/',
+  remesh: '/openapi/v1/remesh/',
 }
 
 const BALANCE_PATH = '/openapi/v1/balance'
@@ -320,7 +347,8 @@ export class MeshyProvider implements Gen3dProvider {
   /**
    * 统一生成提交。text → preview 阶段；两阶段的 refine 经 providerOptions 透传：
    * `{ mode: 'refine', preview_task_id: '<preview task id>' }`（prompt 作 texture_prompt）。
-   * providerOptions 其余字段按官方 snake_case 协议透传进请求体。
+   * providerOptions 其余字段按官方 snake_case 协议透传进请求体；仅 refine 分支会剔除
+   * preview/image 专属及官方已废弃字段（REFINE_STRIP_KEYS，见 docs/providers/meshy-api.md §2.2）。
    */
   async submitGeneration(req: GenerationRequest, opts?: SubmitOptions): Promise<MeshyTaskHandle> {
     const options = req.providerOptions ?? {}
@@ -345,7 +373,17 @@ export class MeshyProvider implements Gen3dProvider {
     // 契约级判别字段不属 Meshy 官方请求体（preview/refine 的 mode 由 build*Payload 写入）
     delete rest.mode
     delete rest.preview_task_id
+    if (kind === 'text-to-3d-refine') {
+      // refine 参数表无 preview/image 专属字段，剔除避免官方严格校验未知字段返回 400（见 REFINE_STRIP_KEYS）
+      for (const key of REFINE_STRIP_KEYS) delete rest[key]
+    }
     Object.assign(payload, rest)
+    if (kind === 'text-to-3d-preview') {
+      // preview 净化（透传后统一做）：smart-topology 强制 meshy-t2、剥离被忽略字段
+      // （should_remesh/decimation_mode/ultra_mode）、仅接受 triangle；
+      // 面数按官方范围钳制（smart 100–15,000 / standard 100–300,000）
+      sanitizePreviewPayload(payload)
+    }
     return this.submit(kind, payload, opts)
   }
 
@@ -428,6 +466,14 @@ export class MeshyProvider implements Gen3dProvider {
 
   async animations(input: MeshyAnimateInput, opts?: SubmitOptions): Promise<MeshyTaskHandle> {
     return this.submit('animate', buildAnimatePayload(input), opts)
+  }
+
+  /**
+   * 低模重拓扑（Meshy 扩展方法，同契约外的 submitSmartTopology 模式；轮询统一走 pollTask）。
+   * input_task_id 与 model_url 二选一，都传时官方 input_task_id 优先。
+   */
+  async submitRemesh(input: MeshyRemeshInput, opts?: SubmitOptions): Promise<MeshyTaskHandle> {
+    return this.submit('remesh', buildRemeshPayload(input), opts)
   }
 
   // ── 余额（GET /openapi/v1/balance；不计队列、免费） ──
@@ -714,8 +760,33 @@ function buildPreviewPayload(input: MeshyTextPreviewInput): Record<string, unkno
   }
   if (input.alphaThumbnail !== undefined) p.alpha_thumbnail = input.alphaThumbnail
   if (input.autoSize !== undefined) p.auto_size = input.autoSize
+  sanitizePreviewPayload(p)
   return p
 }
+
+/**
+ * refine 请求体黑名单：preview / image 专属字段 + 官方已废弃字段。
+ * 官方 refine 参数表（docs/providers/meshy-api.md §2.2）仅有 mode / preview_task_id /
+ * enable_pbr / texture_resolution / texture_prompt / texture_image_url / ai_model /
+ * moderation / remove_lighting / target_formats / alpha_thumbnail / auto_size；
+ * hd_texture 虽在表中但已标记 ⚠ 已废弃（等价 texture_resolution: "4k"），一并剔除。
+ * 以下字段不属 refine 参数（preview/image 专属或官方已废弃），若官方严格校验未知字段，
+ * 混入请求体会 400。剔除用黑名单而非白名单：未来官方新增 refine 字段无需改代码即透传。
+ */
+const REFINE_STRIP_KEYS: readonly string[] = [
+  'target_polycount',
+  'model_type',
+  'pose_mode',
+  'should_remesh',
+  'ultra_mode',
+  'should_texture',
+  'image_enhancement',
+  'multi_view_thumbnails',
+  'symmetry_mode',
+  'is_a_t_pose',
+  'art_style',
+  'hd_texture',
+]
 
 function buildRefinePayload(input: MeshyTextRefineInput): Record<string, unknown> {
   const previewTaskId = input.previewTaskId.trim()
@@ -793,7 +864,10 @@ function applyMeshOptions(p: Record<string, unknown>, input: MeshyMeshOptions): 
   sanitizeSmartTopology(p)
 }
 
-/** smart-topology：标准模型 id 强制为 meshy-t2；remesh/ultra_mode 官方忽略，剥离 */
+/**
+ * smart-topology 净化：标准模型 id 强制 meshy-t2；should_remesh / decimation_mode /
+ * ultra_mode 官方忽略（剥离）；topology 仅接受 triangle（其余删除，服务端默认 triangle）。
+ */
 function sanitizeSmartTopology(p: Record<string, unknown>): void {
   if (p.model_type !== 'smart-topology') return
   const ai = p.ai_model
@@ -801,7 +875,43 @@ function sanitizeSmartTopology(p: Record<string, unknown>): void {
     p.ai_model = 'meshy-t2'
   }
   delete p.should_remesh
+  delete p.decimation_mode
   delete p.ultra_mode
+  if (p.topology !== undefined && p.topology !== 'triangle') delete p.topology
+}
+
+/**
+ * preview 请求体净化（submitGeneration 透传后 / buildPreviewPayload 末尾调用）：
+ * 面数按官方范围钳制（smart-topology 100–15,000、其余 100–300,000），
+ * 再叠加 smart-topology 约束剥离。透传值可能是字符串数字（providerParams 白名单
+ * 仅做 trim），先归一化再钳。
+ */
+function sanitizePreviewPayload(p: Record<string, unknown>): void {
+  if (p.target_polycount !== undefined) {
+    const n = toFiniteNumber(p.target_polycount)
+    const smart = p.model_type === 'smart-topology'
+    p.target_polycount = clampOfficialPolycount(n, smart)
+  }
+  sanitizeSmartTopology(p)
+}
+
+/** 非有限数字 / 字符串数字 → 有限 number；其余 undefined */
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : undefined
+  }
+  return undefined
+}
+
+/** 官方预览面数钳制：smart-topology 100–15,000（默认 4,000）；其余 100–300,000（默认 30,000） */
+function clampOfficialPolycount(value: number | undefined, smartTopology: boolean): number | undefined {
+  if (value === undefined) return undefined
+  if (smartTopology) {
+    return Number.isFinite(value) ? Math.min(15_000, Math.max(100, Math.round(value))) : 4_000
+  }
+  return Number.isFinite(value) ? Math.min(300_000, Math.max(100, Math.round(value))) : 30_000
 }
 
 function buildRigPayload(input: MeshyRigInput): Record<string, unknown> {
@@ -860,6 +970,53 @@ function buildAnimatePayload(input: MeshyAnimateInput): Record<string, unknown> 
     p.post_process = pp
   }
   return p
+}
+
+function buildRemeshPayload(input: MeshyRemeshInput): Record<string, unknown> {
+  const hasTask = typeof input.inputTaskId === 'string' && input.inputTaskId.trim() !== ''
+  const hasUrl = typeof input.modelUrl === 'string' && input.modelUrl.trim() !== ''
+  if (!hasTask && !hasUrl) {
+    throw new MeshyProviderError('provider_bad_request', 'remesh：input_task_id 或 model_url 必填其一', {
+      retryable: false,
+    })
+  }
+  const p: Record<string, unknown> = {}
+  // 官方：都传时 input_task_id 优先——只传优先项，避免歧义
+  if (hasTask) p.input_task_id = input.inputTaskId
+  else p.model_url = input.modelUrl
+  if (input.targetFormats !== undefined && input.targetFormats.length > 0) {
+    p.target_formats = [...input.targetFormats]
+  }
+  if (input.topology !== undefined) {
+    if (input.topology !== 'quad' && input.topology !== 'triangle') {
+      throw new MeshyProviderError('provider_bad_request', 'remesh：topology 仅支持 quad/triangle', {
+        retryable: false,
+      })
+    }
+    p.topology = input.topology
+  }
+  const poly = clampRemeshPolycount(input.targetPolycount)
+  const dec = input.decimationMode
+  if (dec !== undefined && (dec !== 1 && dec !== 2 && dec !== 3 && dec !== 4)) {
+    throw new MeshyProviderError('provider_bad_request', 'remesh：decimation_mode 仅支持 1–4', {
+      retryable: false,
+    })
+  }
+  // 官方：decimation_mode 与 target_polycount 互斥，设置后 target_polycount 被忽略
+  if (dec !== undefined) {
+    p.decimation_mode = dec
+    if (poly !== undefined) delete p.target_polycount
+  } else if (poly !== undefined) {
+    p.target_polycount = poly
+  }
+  return p
+}
+
+/** remesh 目标面数钳制：100–300,000（官方默认 30,000；越界钳、非整数四舍五入） */
+function clampRemeshPolycount(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined
+  if (!Number.isFinite(value)) return 30_000
+  return Math.min(300_000, Math.max(100, Math.round(value)))
 }
 
 /** 面数钳制：smart-topology（meshy-t2）按官方 100–15,000；其余沿用 legacy clampTargetPolycount（1,000–300,000） */
@@ -1068,6 +1225,7 @@ const GLB_ROLE: Record<MeshyTaskKind, string> = {
   'multi-image-to-3d': 'glb',
   rig: 'rigged_character_glb',
   animate: 'animation_glb',
+  remesh: 'glb',
 }
 
 const FBX_ROLE: Record<MeshyTaskKind, string> = {
@@ -1077,6 +1235,7 @@ const FBX_ROLE: Record<MeshyTaskKind, string> = {
   'multi-image-to-3d': 'fbx',
   rig: 'rigged_character_fbx',
   animate: 'animation_fbx',
+  remesh: 'fbx',
 }
 
 const TEXTURE_ROLES = ['base_color', 'metallic', 'normal', 'roughness', 'emission'] as const

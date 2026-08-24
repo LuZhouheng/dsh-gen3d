@@ -125,6 +125,8 @@ export interface Gen3dToolDefinition {
   output: {
     schema: ValueSchemaSpec;
     render: (args: Record<string, unknown>, value: unknown) => ContentBlock[];
+    /** 可重放的展示元数据（随 tool/result 持久化，供 web 自定义卡片摄取；可选）。 */
+    presentationMeta?: (args: Record<string, unknown>, value: unknown) => Record<string, unknown>;
   };
   /** 计费元信息（供 pre-execute 审批 gate 展示预计消耗；mock 回退不消耗）。 */
   billing?: { credits: number; note?: string };
@@ -139,6 +141,8 @@ export interface Gen3dToolSpec<O extends object> {
   output: {
     schema: ValueSchemaSpec;
     render?: (args: Record<string, unknown>, value: O) => ContentBlock[];
+    /** 展示元数据（可选；render 为 prose 的工具用它给自定义卡片递结构化数据）。 */
+    presentationMeta?: (args: Record<string, unknown>, value: O) => Record<string, unknown>;
   };
   billing?: Gen3dToolDefinition['billing'];
   run: (args: Record<string, unknown>, exec: ToolRunContext) => Promise<O>;
@@ -176,6 +180,12 @@ export function defineGen3dTool<O extends object>(spec: Gen3dToolSpec<O>): Gen3d
     output: {
       schema: spec.output.schema,
       render: (args: Record<string, unknown>, value: unknown) => render(args, value as O),
+      ...(spec.output.presentationMeta !== undefined
+        ? {
+            presentationMeta: (args: Record<string, unknown>, value: unknown) =>
+              spec.output.presentationMeta!(args, value as O),
+          }
+        : {}),
     },
     ...(spec.billing !== undefined ? { billing: spec.billing } : {}),
     execute,

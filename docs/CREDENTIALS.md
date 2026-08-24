@@ -16,7 +16,7 @@
 
 各家 key 格式与注意点：
 
-- **Meshy**：官方未记载格式（社区流传 `msy-` 前缀，不作依据）；key 只显示一次，可随时吊销，可按用途建多个 key 分别统计用量。
+- **Meshy**：官方文档已记载格式为 `msy_<随机串>`（**下划线**，如 `msy_YOUR_API_KEY`；认证页示例）；key 只显示一次，可随时吊销，可按用途建多个 key 分别统计用量。
 - **Hunyuan3D（TokenHub）**：Bearer 直用；TokenHub 仅覆盖生成类，绑骨 / 文生动作 / 智能拓扑等后处理**只有 TC3 路径**（即需要 `HUNYUAN3D_SECRET_ID` / `HUNYUAN3D_SECRET_KEY`）。注意官方公告：混元能力逐步迁移至 TokenHub，原平台停止新购模型服务——新开户走 TokenHub。
 - **Tripo3D**：key 以 `tsk_` 开头；`tcli_` 开头的 Client ID 仅标识应用，**拿 Client ID 请求会全部 401**。任务查询强绑定创建时的同一把 key。
 - **Rodin**：key 只显示一次，创建后立即保存，丢失需重新生成；Free / Creator 订阅无 API access，`SUBSCRIPTION_PLAN_TOO_LOW` 即此原因，状态界面会提示。
@@ -28,7 +28,7 @@
 | 优先级 | 来源 | 说明 |
 | --- | --- | --- |
 | 1（最高） | **环境变量**（`process.env`） | 总是胜出，遮蔽所有文件配置；空串视为未配置 |
-| 2 | `$DSH_HOME/.credentials.yaml` | 推荐配置位置；胜过两个 `.env` 层 |
+| 2 | `$DSH_HOME/.credentials.yaml` | 推荐配置位置（**rc.2+ 仅当该文件由插件自管理、host 不接管时适用**，见 §3.1 警示；host 接管时插件读不到 `refs:` 下的键）；胜过两个 `.env` 层 |
 | 3 | `<cwd>/.env` | 工作区级 `.env`（`.env` 子集解析） |
 | 4（最低） | `$DSH_HOME/.env` | 用户级 `.env` |
 
@@ -36,13 +36,26 @@
 
 ## 三、配置方式
 
-### 3.1 `$DSH_HOME/.credentials.yaml`（推荐）
+### 3.1 `$DSH_HOME/.credentials.yaml`（⚠ 本机不推荐）
+
+> **⚠ 醒目警示（DSH host 0.1.1-rc.2 起）**：本机 DSH host 的 `~/.dsh/.credentials.yaml`
+> 已是 **host 管理的版本化格式**（`version: 1` + `refs:` 包裹）。两点务必注意：
+>
+> 1. **不要手工往该文件加根级键**——host 对该文件格式校验严格，根级乱加键会导致
+>    **boot 失败**；
+> 2. **本插件的自实现解析器读不到 `refs:` 下的键**（`src/config.ts` `parseCredentialsYaml`
+>    只认扁平根映射与旧 `credentials:` 包裹层，遇 `refs:` 子树静默跳过、不抛错）。
+>
+> 因此在本机（host 接管该文件）上把 `MESHY_API_KEY` 等写进该文件**对插件不可见**，
+> 表现为 `configured: false` 走 mock。**本插件的 key 配置推荐路径改为：环境变量
+> （§3.3）或 `$DSH_HOME/.env`（§3.2）。** 下文两种形态说明**仅当该文件由插件自管理、
+> host 不接管时适用**（如 CI 注入的独立 `DSH_HOME`）。
 
 解析器（自实现 YAML 子集）**兼容两种形态**，只认扁平映射，其余 YAML 特性（数组 / 嵌套 / 流式映射）不支持：
 
 ```yaml
-# 形态一（权威）：根映射 —— 与 DSH credentials-local 标准一致，推荐
-MESHY_API_KEY: "meshy-xxxxxxxx"
+# 形态一（权威）：根映射 —— 与 DSH credentials-local 标准一致（仅当该文件由插件自管理、host 不接管时适用，见上方警示）
+MESHY_API_KEY: "msy_xxxxxxxx"
 HUNYUAN3D_API_KEY: "xxxxxxxx"
 HUNYUAN3D_SECRET_ID: "AKIDxxxxxxxx"     # 可选：腾讯云后处理（TC3）
 HUNYUAN3D_SECRET_KEY: "xxxxxxxx"        # 可选：腾讯云后处理（TC3）
@@ -53,7 +66,7 @@ RODIN_API_KEY: "xxxxxxxx"
 ```yaml
 # 形态二（兼容）：顶层 credentials: 包裹一层，与根映射等价
 credentials:
-  MESHY_API_KEY: "meshy-xxxxxxxx"
+  MESHY_API_KEY: "msy_xxxxxxxx"
 ```
 
 > 形态二是早期 README 示例遗留的写法，解析器为向后兼容保留；新配置请用形态一。两种形态解析结果完全一致，不要同时用两种形态写同一个 key（后者会覆盖前者，键名相同时以文件内靠后的行为准）。
@@ -63,14 +76,14 @@ credentials:
 `<cwd>/.env` 与 `$DSH_HOME/.env` 均支持 `.env` 子集（`KEY=VALUE` 行、单双引号包裹、整行注释）：
 
 ```bash
-MESHY_API_KEY=meshy-xxxxxxxx
+MESHY_API_KEY=msy_xxxxxxxx
 TRIPO3D_API_KEY=tsk_xxxxxxxx
 ```
 
 ### 3.3 环境变量（最高优先级）
 
 ```bash
-export MESHY_API_KEY="meshy-xxxxxxxx"
+export MESHY_API_KEY="msy_xxxxxxxx"
 export HUNYUAN3D_API_KEY="xxxxxxxx"
 export TRIPO3D_API_KEY="tsk_xxxxxxxx"
 export RODIN_API_KEY="xxxxxxxx"
@@ -100,6 +113,7 @@ export RODIN_API_KEY="xxxxxxxx"
    - Rodin：`https://api.hyper3d.com`
    - 资产下载：各家签名的临时 URL（Meshy / 腾讯 COS / Tripo S3 / Rodin 直链），拿到即下载，无额外凭证。
 5. **未配置时的行为**：某家未配置 → 该 provider 抛 `provider_not_configured`，工具层回退确定性 mock（结果带 `usedMock: true`），并在状态界面提示「配置 key 后启用真实生成」。**不会**因为缺 key 悄悄调用别的供应商或第三方服务。
+6. **本机推荐配置路径（DSH host 0.1.1-rc.2+）**：`~/.dsh/.credentials.yaml` 已由 host 接管为版本化格式（`version: 1` + `refs:`），既不能手工加根级键（boot 会失败）、插件也读不到 `refs:` 下的键——Meshy 等四家 key 请走**环境变量（§3.3）或 `~/.dsh/.env`（§3.2）**；`$DSH_HOME/.credentials.yaml` 形态仅适用于该文件由插件自管理、host 不接管的部署（如 CI 注入的独立 `DSH_HOME`）。
 
 ## 六、验证
 

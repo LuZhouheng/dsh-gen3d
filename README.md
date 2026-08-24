@@ -64,7 +64,7 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 
 ## 功能
 
-19 个 DSH 工具（`src/tools/`，`allGen3dTools`），分四组：
+21 个 DSH 工具（`src/tools/`，`allGen3dTools`），分五组：
 
 **生成（11 个）**
 
@@ -100,11 +100,18 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 | `gen3d_export_playable_character` | 导出可玩角色：动作合并输出 `merged.glb` + `playable.json` |
 | `gen3d_adopt_playable_character` | 采纳交付物：孤儿 `merged.glb` 补 clip 映射与交付快照 |
 
+**资产（2 个）**
+
+| 工具 | 说明 |
+| --- | --- |
+| `gen3d_inspect_asset` | 资产体检：对照预算档（hero-character / prop / environment）检查面数、贴图、材质三科 |
+| `gen3d_render_preview` | 视口预览：纯 JS 软渲染出 PNG/GIF 预览并落盘；web 会话「3D 资产」页签可交互查看 |
+
 一句话产线：**生成 → 评分 → 命名 →（要会动才）绑骨 → 套动作 → 导出**；静态优先、会动 opt-in（按次计费）。注：legacy 的 `pose-standardization`（A/T-pose 标准化）**暂缓未迁移**——官方无独立等价 API，详见[已知缺口](#已知缺口)。
 
 ### 供应商能力矩阵
 
-四家官方 API 能力对照（依据 `docs/providers/` 四份协议文档，2026-08-13 官方文档快照；✅ 官方支持 / ⚠️ 部分或近似 / ❌ 无）：
+四家官方 API 能力对照（依据 `docs/providers/` 四份协议文档；2026-08-13 快照，meshy 已按 2026-08-24 官方文档刷新；✅ 官方支持 / ⚠️ 部分或近似 / ❌ 无）：
 
 | 能力 | Meshy | 腾讯混元 3D | Tripo3D | Rodin |
 | --- | --- | --- | --- | --- |
@@ -113,12 +120,12 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 | 多视图生 3D | ✅ multi-image-to-3d（1–4 张） | ✅ 3 视角（3.1 版 8 视角） | ✅ `multiview_to_model`（固定 4 视角 `front,left,back,right`，front 必填） | ✅ 2–5 张（form 保序，**首张固定用于材质生成**） |
 | 自动绑骨 | ✅ rigging（人形带贴图，自带 walk/run） | ✅ `SubmitAutoRiggingJob`（A/T-pose 输入，可带 48 预设动作） | ✅ `animate_rig`（biped/quadruped 等 7 类，可先免费预检） | ❌ 无（`TAPose=true` + Quad 产绑骨就绪输入） |
 | 动作 / 动画 | ✅ animations（静态动作目录 0–696，约 690 条） | ✅ 绑骨内置 48 预设动作 + 文生动作 | ✅ `animate_retarget`（16 个 `preset:*` 预设，一次最多 5 个） | ❌ 无 |
-| 低模 / 重拓扑 | ✅ smart-topology（`meshy-t2`）+ 独立 Remesh API | ✅ `Submit3DSmartTopologyJob` + 减面 + `GenerateType=LowPoly` | ✅ P1 产品线 / `smart_low_poly` / `highpoly_to_lowpoly` | ⚠️ 仅生成时控面数（quality / quality_override / Sketch 档），无独立端点 |
+| 低模 / 重拓扑 | ✅ smart-topology（`meshy-t2`）+ 独立 Remesh API（`gen3d_retopo_lowpoly` 的 meshy 路由已接入：`input_task_id` / 本地 GLB Data URI 直传，无需公网 URL） | ✅ `Submit3DSmartTopologyJob` + 减面 + `GenerateType=LowPoly` | ✅ P1 产品线 / `smart_low_poly` / `highpoly_to_lowpoly` | ⚠️ 仅生成时控面数（quality / quality_override / Sketch 档），无独立端点 |
 | 贴图精修 | ✅ refine 追加贴图（`texture_image_url`） | ⚠️ 无直接对应（纹理生成 / 编辑近似替代） | ✅ `texture_model` | ✅ `rodin_texture_only`（模型 ≤10MB） |
 | 余额查询 | ✅ `GET /openapi/v1/balance` | ⚠️ 无独立接口（TC3 任务查询响应含 `ResultCreditConsumed` / `ResultCreditDetails` 明细） | ✅ `GET /v2/openapi/user/balance` | ✅ `GET /api/v2/check_balance` |
 | 接入门槛 | 注册即可（积分制） | 首开通送 100 积分；新能力逐步迁往 TokenHub | 注册送 300 积分（两周有效），积分永不过期 | **Business 订阅 $120/月**（更低档无 API access） |
 
-**要点**：Meshy 能力最全（生成 / 精修 / 绑骨 / 动作全链路）；腾讯混元后处理强（绑骨 + 文生动作 + 智能拓扑）但需 TC3 密钥对，且输入文件要公网 URL；Tripo 生成档位多（含 P1 结构化低模产品线）但图片输入不支持 base64、需先上传；Rodin 仅覆盖生成 + 拆分（Bang）+ 重贴图，无绑骨 / 动作，订阅门槛最高 —— 定位为可选增强供应商。详细协议见 `docs/providers/`。
+**要点**：Meshy 能力最全（生成 / 精修 / 绑骨 / 动作全链路，重拓扑本地资产可直接经 Remesh Data URI 直传）；腾讯混元后处理强（绑骨 + 文生动作 + 智能拓扑）但需 TC3 密钥对，且输入文件要公网 URL；Tripo 生成档位多（含 P1 结构化低模产品线）但图片输入不支持 base64、需先上传；Rodin 仅覆盖生成 + 拆分（Bang）+ 重贴图，无绑骨 / 动作，订阅门槛最高 —— 定位为可选增强供应商。详细协议见 `docs/providers/`。
 
 ### Mock 模式
 
@@ -126,11 +133,11 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 
 ## 已知缺口
 
-当前实现的已知能力边界（九条，每条含**影响 / 规避方式 / 后续计划**）见 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md)。要点速览：
+当前实现的已知能力边界（十三条，每条含**影响 / 规避方式 / 后续计划**）见 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md)。要点速览：
 
 - **Hunyuan 套动作**：`apply-motion` 的 Hunyuan 路由暂不可用——官方 48 预设动作目前只能绑骨时经 `motionType` 顺带，独立套动作待挂接 `SubmitHunyuanTo3DMotionJob`
 - **Tripo 绑骨**：仅限 Tripo 自身生成的资产；外部 GLB 的 `import_model` 导入链路未实现
-- **低模重拓扑**：真实路径需公网源 URL（无内置 COS / 模型上传链路），本地资产需用户自备直链
+- **低模重拓扑**：meshy 路由已落地（本地 GLB Data URI 直传 / Meshy 任务 `input_task_id`，5 积分/次）；hunyuan / tripo 路由仍需公网源 URL / Tripo 任务 id
 - **Rodin**：无绑骨 / 动作 / 重拓扑端点，且 API access 需 Business 订阅（$120/月）——定位为可选增强供应商
 - **pose-standardization 暂缓**：官方无独立等价 API，未迁移
 
@@ -180,7 +187,7 @@ dsh-gen3d/
 │   ├── storage.ts        # Gen3dStore 资产落盘 / 缓存 / 审计 / 锁
 │   ├── client/           # 设置卡片浏览器半边（注册 / 控制器 / 组件）
 │   └── providers/        # 四家官方 API 直连（types 契约 + meshy / hunyuan3d / tripo3d / rodin）
-├── skills/               # 随包分发的 agent 技能
+├── skills/               # 随包分发的 agent 技能（generate-3d-character / game-3d-assets）
 └── docs/
     ├── KNOWN-GAPS.md     # 已知能力缺口（影响 / 规避 / 后续计划）
     ├── CREDENTIALS.md    # 凭证安全配置详细指南

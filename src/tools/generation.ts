@@ -10,6 +10,7 @@
 // 工具名 gen3d_*（snake_case）。
 
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { isProviderConfigured, providerEnvKeyOf, redactKey } from '../config.js';
 import { QUALITY_RUBRIC, clampTargetPolycount, makeCacheKey } from '../legacy/shared/catalog.js';
@@ -51,7 +52,7 @@ const PROVIDER_NAMES: Record<ProviderId, string> = {
 const PROVIDER_INFO: Record<ProviderId, { models: string[]; note: string }> = {
   meshy: {
     models: ['meshy-5', 'meshy-6', 'meshy-7', 'latest', 'meshy-t1', 'meshy-t2'],
-    note: '文生两阶段（preview→refine）、图生、多视图、精修、绑骨、动作、余额查询；base64 图片输入支持',
+    note: '文生两阶段（preview→refine）、图生、多视图、精修、重拓扑（remesh）、绑骨、动作、余额查询；latest 现解析为 Meshy 7；base64 图片输入支持',
   },
   hunyuan3d: {
     models: ['hy-3d-3.0', 'hy-3d-3.1'],
@@ -74,6 +75,10 @@ const PP_ALLOW: Record<ProviderId, readonly string[]> = {
     'should_texture', 'image_enhancement', 'remove_lighting', 'moderation', 'target_formats',
     'auto_size', 'alpha_thumbnail', 'multi_view_thumbnails', 'enable_pbr', 'texture_resolution',
     'texture_prompt', 'texture_image_url',
+    // 2026-08-24 官方现行字段：preview 减面档位（1–4，与 target_polycount 互斥）/
+    // 输出拓扑（quad/triangle）/ 原点设置 / multi-image 的 1–4 张贴图引导
+    // （texture_image_urls 与 texture_image_url/texture_prompt 互斥由服务端校验）
+    'decimation_mode', 'topology', 'origin_at', 'texture_image_urls',
   ],
   hunyuan3d: ['model', 'generate_type', 'polygon_type', 'result_format', 'view_names'],
   tripo3d: ['model_version', 'negative_prompt', 'model_seed', 'file_token', 'original_task_id'],
@@ -100,6 +105,12 @@ function asNumber(raw: unknown, fallback: number): number {
   if (raw === undefined || raw === null) return fallback;
   const n = typeof raw === 'number' ? raw : Number(raw);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** meshy remesh 目标面数钳制：100–300,000（越界钳、非整数四舍五入）。 */
+function clampRemeshPolycount(value: number): number {
+  if (!Number.isFinite(value)) return 30000;
+  return Math.min(300000, Math.max(100, Math.round(value)));
 }
 
 function asRecord(raw: unknown): Record<string, unknown> | undefined {
@@ -442,9 +453,9 @@ export const gen3dTextTo3d = defineGen3dTool({
       description: '目标面数（1,000–300,000，越界钳制；仅 Meshy / Hunyuan 生效）',
     },
     enablePbr: { type: 'boolean', default: true, description: 'Meshy：是否追加 PBR 贴图（false 时仅几何 preview）' },
-    providerParams: { type: 'object', additionalProperties: true, description: '供应商私有参数透传（按各家官方字段，白名单过滤；Meshy 如 ai_model/pose_mode，Hunyuan 如 model/generate_type）' },
+    providerParams: { type: 'object', additionalProperties: true, description: '供应商私有参数透传（按各家官方字段，白名单过滤；Meshy：ai_model 缺省 latest=Meshy 7 代、低模风格化用 model_type=smart-topology+ai_model=meshy-t2、更精细表面用 ultra_mode=true+5 积分；Hunyuan 如 model/generate_type）' },
   },
-  billing: { credits: 3, note: 'Meshy 两阶段约 preview 1 + refine 2；各 provider 实际消耗以官方计费为准' },
+  billing: { credits: 30, note: 'Meshy 两阶段：preview 20（meshy-6/7；meshy-5/meshy-t2 为 5）+ refine 10（8k 纹理 15）；ultra_mode 另 +5；各 provider 实际消耗以官方计费为准' },
   output: { schema: resultSchema({}) },
   async run(args, exec) {
     const providerId = asProvider(args.provider, 'meshy');
@@ -499,7 +510,7 @@ export const gen3dImageTo3d = defineGen3dTool({
     enablePbr: { type: 'boolean', default: true, description: '是否启用 PBR 贴图' },
     providerParams: { type: 'object', additionalProperties: true, description: '供应商私有参数透传（白名单过滤）' },
   },
-  billing: { credits: 2, note: '各 provider 实际消耗以官方计费为准' },
+  billing: { credits: 30, note: 'Meshy 图生（meshy-6/7）：有纹理 30 / 无纹理 20 / 8K 纹理 35，ultra_mode 另 +5；meshy-t1/t2 为 30/20、5/15/20 档；各 provider 实际消耗以官方计费为准' },
   output: { schema: resultSchema({}) },
   async run(args, exec) {
     const providerId = asProvider(args.provider, 'meshy');
@@ -618,7 +629,7 @@ export const gen3dViewsTo3d = defineGen3dTool({
     enablePbr: { type: 'boolean', default: true, description: '是否启用 PBR 贴图' },
     providerParams: { type: 'object', additionalProperties: true, description: '供应商私有参数透传（白名单过滤）' },
   },
-  billing: { credits: 2, note: '各 provider 实际消耗以官方计费为准' },
+  billing: { credits: 30, note: 'Meshy 多视图（meshy-6/7）：有纹理 30 / 无纹理 20 / 8K 纹理 35；meshy-5 为 15/5；各 provider 实际消耗以官方计费为准' },
   output: { schema: resultSchema({}) },
   async run(args, exec) {
     const providerId = asProvider(args.provider, 'meshy');
@@ -694,7 +705,7 @@ export const gen3dRefineMesh = defineGen3dTool({
     assetName: { type: 'string', description: '资产名（缺省 refine-<previewTaskId>）' },
     providerParams: { type: 'object', additionalProperties: true, description: 'Meshy refine 私有参数透传（texture_resolution / texture_image_url / remove_lighting 等）' },
   },
-  billing: { credits: 2, note: 'Meshy refine 实际消耗以官方计费为准' },
+  billing: { credits: 10, note: 'Meshy refine：10 积分（texture_resolution 2k/4k）/ 15 积分（8k）；以官方计费为准' },
   output: { schema: resultSchema({}) },
   async run(args, exec) {
     const previewTaskId = asString(args.previewTaskId, 'previewTaskId', 'invalid_preview_task');
@@ -744,22 +755,28 @@ export const gen3dRefineMesh = defineGen3dTool({
 
 // ── gen3d_retopo_lowpoly ────────────────────────────────────────────────────
 
-/** 计费：低模重拓扑（hunyuan3d 智能拓扑 / tripo3d 智能低模）；真实路径需公网源 URL 或 Tripo 任务 id。 */
+/**
+ * 计费：低模重拓扑（meshy remesh / hunyuan3d 智能拓扑 / tripo3d 智能低模）。
+ * meshy：Meshy 资产可直接用 sidecar 任务 id（meshyTaskRefs.resultTaskId），
+ * 本地任意 GLB 经 Data URI（application/octet-stream）上传，无需公网 URL；
+ * hunyuan3d 需 sourceUrl（公网可达的源 GLB URL）；tripo3d 需原始任务 id。
+ */
 export const gen3dRetopoLowpoly = defineGen3dTool({
   name: 'gen3d_retopo_lowpoly',
   description:
-    '低模重拓扑：从高模源产出规整低面数新资产（源资产保留，新资产 sourceInputAssetPaths 记录来源）。provider=hunyuan3d（默认）走腾讯云 API 3.0 智能拓扑 Submit3DSmartTopologyJob，需要 sourceUrl（公网可达的源 GLB URL）；provider=tripo3d 走 Tripo 智能低模（需 originalTaskId：Tripo 侧带模型输出的任务 id）。mock 路径不需要 URL。计费工具，审批确认后执行；未配置 key 回退 mock。',
+    '低模重拓扑：从高模源产出规整低面数新资产（源资产保留，新资产 sourceInputAssetPaths 记录来源）。provider=meshy 走官方 remesh API：Meshy 资产可直接用侧车任务 id（sidecar 的 meshyTaskRefs.resultTaskId），任意本地 GLB（含非 Meshy 资产）经 Data URI 上传，无需公网 URL，5 积分/次；provider=hunyuan3d（默认）走腾讯云 API 3.0 智能拓扑 Submit3DSmartTopologyJob，需要 sourceUrl（公网可达的源 GLB URL）；provider=tripo3d 走 Tripo 智能低模（需 originalTaskId：Tripo 侧带模型输出的任务 id）。mock 路径不需要 URL。计费工具，审批确认后执行；未配置 key 回退 mock。',
   parameters: {
     assetPath: { type: 'string', required: true, description: '源高模资产相对路径' },
-    sourceUrl: { type: 'string', description: '源 GLB 的公网 URL（真实路径必需；mock 不需要）' },
-    originalTaskId: { type: 'string', description: 'Tripo 侧带模型输出的任务 id（provider=tripo3d 时替代 sourceUrl）' },
-    provider: { type: 'string', enum: ['hunyuan3d', 'tripo3d'], default: 'hunyuan3d', description: '重拓扑供应商' },
-    polygonType: { type: 'string', enum: ['triangle', 'quadrilateral'], default: 'quadrilateral', description: '输出面型' },
-    detailLevel: { type: 'string', enum: ['high', 'medium', 'low'], default: 'high', description: '细节档（hunyuan3d FaceLevel）' },
+    sourceUrl: { type: 'string', description: '源 GLB 的公网 URL（provider=hunyuan3d 必需；meshy/tripo3d 不需要）' },
+    originalTaskId: { type: 'string', description: 'provider=meshy：Meshy 已完成任务 id（优先于 sidecar 引用；text-to-3d preview/refine、image-to-3d、retexture）；provider=tripo3d：Tripo 侧带模型输出的任务 id' },
+    provider: { type: 'string', enum: ['meshy', 'hunyuan3d', 'tripo3d'], default: 'hunyuan3d', description: '重拓扑供应商' },
+    polygonType: { type: 'string', enum: ['triangle', 'quadrilateral'], default: 'quadrilateral', description: '输出面型（meshy 路由映射 topology：quadrilateral→quad、triangle→triangle）' },
+    detailLevel: { type: 'string', enum: ['high', 'medium', 'low'], default: 'high', description: '细节档（hunyuan3d FaceLevel；meshy 路由映射 decimation_mode：high→2、medium→3、low→4；未传 targetPolycount 时生效）' },
+    targetPolycount: { type: 'integer', description: 'meshy 路由：目标面数（100–300,000；与 detailLevel 互斥，给定时优先生效）' },
     assetSlot: { type: 'string', enum: ['characters', 'meshes'], description: '新资产槽位（缺省沿用源资产）' },
     assetName: { type: 'string', description: '新资产名（缺省 <源名>-lowpoly）' },
   },
-  billing: { credits: 1, note: 'hunyuan3d 智能拓扑实际消耗以官方计费为准' },
+  billing: { credits: 5, note: 'Meshy remesh 官方 5 积分/次；hunyuan3d / tripo3d 实际消耗以各家官方计费为准' },
   output: { schema: resultSchema({}) },
   async run(args, exec) {
     const store = getStore();
@@ -772,6 +789,15 @@ export const gen3dRetopoLowpoly = defineGen3dTool({
       : source.custom.assetSlot;
     const polygonType = args.polygonType === 'triangle' ? 'triangle' : 'quadrilateral';
     const detailLevel = args.detailLevel === 'low' || args.detailLevel === 'medium' ? args.detailLevel : 'high';
+    // meshy 路由：targetPolycount 与 detailLevel 互斥，给定时优先生效（官方 100–300,000 钳制）
+    const meshPolycount =
+      providerId !== 'meshy' || args.targetPolycount === undefined || args.targetPolycount === null
+        ? undefined
+        : clampRemeshPolycount(asNumber(args.targetPolycount, 30000));
+    const meshDecimation: 1 | 2 | 3 | 4 | undefined =
+      meshPolycount === undefined
+        ? (detailLevel === 'low' ? 4 : detailLevel === 'medium' ? 3 : 2)
+        : undefined;
     const sourceHash = source.contentHash.replace(/^sha256:/, '') || assetPath;
     const cacheKey = genCacheKey(providerId, 'image', {
       op: 'lowpoly',
@@ -779,6 +805,13 @@ export const gen3dRetopoLowpoly = defineGen3dTool({
       inputHash: sourceHash,
       polygonType,
       detailLevel,
+      ...(providerId === 'meshy'
+        ? {
+            remeshPolycount: meshPolycount ?? 'by-detail',
+            remeshTopology: polygonType,
+            remeshDecimation: meshDecimation ?? 'by-detail',
+          }
+        : {}),
     });
     const baseName = sanitizeStem(
       assetPath.split('/').pop()?.replace(/\.glb$/i, '') ?? 'asset',
@@ -796,6 +829,64 @@ export const gen3dRetopoLowpoly = defineGen3dTool({
     return generateCacheFirst(ctx, async () => {
       const { provider, usedMock } = await resolveProviderOrMock(providerId);
       if (!provider) return mockProviderResult(providerId, 'image', `lowpoly:${assetPath}`);
+      if (providerId === 'meshy') {
+        const remesh = provider as Gen3dProvider & {
+          submitRemesh?: (
+            req: {
+              inputTaskId?: string;
+              modelUrl?: string;
+              targetFormats?: readonly string[];
+              topology?: 'quad' | 'triangle';
+              targetPolycount?: number;
+              decimationMode?: 1 | 2 | 3 | 4;
+            },
+            opts?: { signal?: AbortSignal },
+          ) => Promise<TaskHandle>;
+        };
+        if (typeof remesh.submitRemesh !== 'function') {
+          throw new ToolError('provider_capability_missing', 'Meshy provider 未实现 submitRemesh（并行任务进行中）');
+        }
+        // 输入优先级：originalTaskId > sidecar meshyTaskRefs.resultTaskId > 读本地 GLB 转 Data URI
+        const explicitTaskId = typeof args.originalTaskId === 'string' ? args.originalTaskId.trim() : '';
+        const sidecarTaskId = source.custom.meshyTaskRefs?.resultTaskId ?? null;
+        let remeshInput: { inputTaskId: string } | { modelUrl: string };
+        if (explicitTaskId !== '') {
+          remeshInput = { inputTaskId: explicitTaskId };
+        } else if (sidecarTaskId !== null) {
+          remeshInput = { inputTaskId: sidecarTaskId };
+        } else {
+          const fileName = assetPath.split('/').pop() ?? '';
+          let bytes: Uint8Array;
+          try {
+            bytes = new Uint8Array(await readFile(join(store.assetDir(slot), fileName)));
+          } catch (err) {
+            throw new ToolError('asset_not_found', `读取源 GLB 失败：${err instanceof Error ? err.message : String(err)}`);
+          }
+          if (bytes.byteLength === 0) throw new ToolError('asset_not_found', '源 GLB 为空');
+          remeshInput = { modelUrl: `data:application/octet-stream;base64,${Buffer.from(bytes).toString('base64')}` };
+        }
+        const handle = await remesh.submitRemesh(
+          {
+            ...remeshInput,
+            targetFormats: ['glb'],
+            topology: polygonType === 'quadrilateral' ? 'quad' : 'triangle',
+            ...(meshPolycount !== undefined
+              ? { targetPolycount: meshPolycount }
+              : { decimationMode: meshDecimation ?? 2 }),
+          },
+          { signal: exec.signal },
+        );
+        const result = (await provider.pollTask(handle, { signal: exec.signal })) as MeshyTaskResult;
+        return {
+          provider: 'meshy',
+          mode: 'image',
+          providerMode: 'real',
+          sourceJobId: result.taskId,
+          prompt: source.custom.prompt,
+          files: meshyFilesToProviderFiles(result),
+          meshyTaskRefs: { previewTaskId: null, resultTaskId: result.taskId },
+        };
+      }
       if (providerId === 'hunyuan3d') {
         const sourceUrl = asString(args.sourceUrl, 'sourceUrl', 'missing_source_url');
         const smartTopology = provider as Gen3dProvider & {

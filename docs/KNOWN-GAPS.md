@@ -1,6 +1,8 @@
 # 已知能力缺口（dsh-gen3d）
 
-> 状态：🟡 快照（2026-08-20，与 `src/` 代码现状对齐）。本文件逐条记录当前实现的
+> 状态：🟡 快照（2026-08-24，与 `src/` 代码现状对齐；§10 为 2026-08-20 实测解决记录，
+> §11–§12 为 2026-08-24 与 DSH 0.1.1-rc.2 环境对齐时新增，§13 为 2026-08-24 视口预览与
+> 交互视窗落地时新增）。本文件逐条记录当前实现的
 > 已知能力缺口：**影响**（用户/链路会看到什么）、**规避方式**（当前可行路径）、
 > **后续计划**（补齐方向）。凡标注「待补」的条目，补齐后须同步删除或改写对应
 > 小节，并把状态翻绿。
@@ -49,28 +51,39 @@ meshy（默认）或 hunyuan3d 路由。
 **后续计划**：补 `importModel`（上传 GLB → 轮询导入任务 → 拿模型任务 id），在
 `gen3d_auto_rig` 的 Tripo 路由里接入「外部 GLB → 先导入再绑骨」。
 
-## 3. retopo-lowpoly 真实路径需公网源 URL（无 COS / 无模型上传链路）
+## 3. hunyuan3d 真实路径仍需公网源 URL；meshy 路由已落地（本地 GLB Data URI 直传）
 
-**现状**：`gen3d_retopo_lowpoly` 的真实路径依赖：
+**现状**：`gen3d_retopo_lowpoly` 的真实路径分三支：
 
-- `hunyuan3d`（默认）：TC3 `Submit3DSmartTopologyJob`，需 `sourceUrl`——
-  公网可达的源 GLB URL（官方约束，输入文件要公网 URL）；
+- `meshy`（已落地，首选规避路径）：Meshy 生成的资产经 sidecar
+  `custom.meshyTaskRefs.resultTaskId`（或显式 `originalTaskId`）走 Remesh API 的
+  `input_task_id`；**本地任意 GLB 读文件转 Data URI（`application/octet-stream`）
+  作 `model_url` 直传，无需公网 URL**（官方 Remesh 支持公网 URL 或 Data URI，
+  详见 `docs/providers/meshy-api.md` §6）；5 积分 / 次，`targetPolycount` /
+  `detailLevel`（→`decimation_mode`）/ `polygonType`（→`topology`）映射见该节注记；
+- `hunyuan3d`（默认，仍受官方约束）：TC3 `Submit3DSmartTopologyJob`，需 `sourceUrl`——
+  **公网可达**的源 GLB URL（官方约束，输入文件要公网 URL）；
 - `tripo3d`：智能低模，需 `originalTaskId`——Tripo 侧带模型输出的任务 id。
 
 本地资产既没有内置对象存储，也没有模型上传链路（Tripo `import_model` 未实现，
-见 #2），所以**本地生成的资产做低模重拓扑，用户必须自备公网直链**（如自有
-COS / OSS / 网盘直链）。mock 路径不需要 URL。
+见 #2），所以 **hunyuan / tripo 两路由**对本地资产仍有来源限制；**meshy 路由无此
+限制**（本地 GLB Data URI 直传）。mock 路径不需要 URL。
 
-**影响**：从本地资产出发的 Hunyuan 智能拓扑，缺 `sourceUrl` 时报
-`missing_source_url`；流程上比「生成→绑骨→动作」（Meshy 全程无需公网 URL）
-多一步外部上传。
+**影响**：
 
-**规避**：把源 GLB 传到自有公网存储拿直链再提交；或先用 Tripo 生成资产（拿
-`originalTaskId`）再走 Tripo 智能低模。
+- meshy 路由：从本地资产（或 Meshy 生成资产）出发可直接重拓扑，流程与
+  「生成→绑骨→动作」（Meshy 全程无需公网 URL）一致，无额外上传步骤；
+- hunyuan / tripo 路由：本地资产仍缺来源——Hunyuan 智能拓扑缺 `sourceUrl` 时报
+  `missing_source_url`；Tripo 智能低模仅限 Tripo 自身生成的资产。
+
+**规避**：走 `gen3d_retopo_lowpoly` 时优先 `provider=meshy`——本地任意 GLB 直接可走
+（Data URI 直传），Meshy 生成资产自动取 sidecar 的 `resultTaskId`（`originalTaskId`
+优先级最高）；用户已有公网源直链或 Tripo 生成任务时才考虑 hunyuan / tripo 路由。
 
 **后续计划**：Tripo `import_model` 落地后（#2），本地 GLB 可经上传链路直接走
-Tripo 智能低模；Hunyuan 侧受官方「公网 URL 输入」约束，仍需要用户自备直链，
-文档标注清楚。
+Tripo 智能低模，三家齐备（meshy 的 `input_task_id` / Data URI、tripo 的
+`import_model`、hunyuan 的公网 URL）；Hunyuan 侧受官方「公网 URL 输入」约束，
+仍需用户自备直链，文档标注清楚。
 
 ## 4. Rodin 无绑骨 / 动作 / 重拓扑，且 API 需 Business 订阅（$120/月）
 
@@ -177,3 +190,61 @@ hunyuan3d 默认 5s / rodin 默认 5s）；HTTP 429 统一映射
 
 **清理**：停 web 服务、删除 `gen3d-e2e` profile 目录、删 tarball 与日志；
 共享设置文档无残留（`gen3d: {}`）。截图存证在 /tmp（不入仓库）。
+
+## 11. 凭证通道与 rc.2 host 版本化 `.credentials.yaml` 不兼容
+
+**现状**：插件自实现凭证解析器（`src/config.ts` `parseCredentialsYaml`）只认扁平根
+映射与旧 `credentials:` 包裹层；DSH host 0.1.1-rc.2 起 `~/.dsh/.credentials.yaml` 为
+**host 管理的版本化格式**（`version: 1` + `refs:` 包裹），解析器遇 `refs:` 子树
+**静默跳过、不抛错**（根级 `version: 1` 则被当作无害键吞掉）。host 对该文件格式
+校验严格：**根级手工加键会导致 boot 失败**。
+
+**影响**：用户在 host 管理的凭证文件里配置 `MESHY_API_KEY` 对插件不可见，
+`providerConfiguredMap` 恒为 false，表现为 `configured: false` 走确定性 mock——
+真实生成链路静默不可用（不报错），只在状态界面显示未配置。
+
+**规避**：key 走**环境变量**（进程导出 `MESHY_API_KEY=...`）或 **`$DSH_HOME/.env`**；
+不要手工编辑 `~/.dsh/.credentials.yaml`（详见 `docs/CREDENTIALS.md` §3.1 警示）。
+
+**后续计划**：迁移到 DSH 官方凭证通道——`inject: ['credentials']` + 每次操作
+`ctx.credentials.resolve(credentialRef('MESHY_API_KEY'))`（见 `docs/dsh-api.md` §4.4），
+复用 host 的 refs 解析；迁移后删除 `src/config.ts` 自实现解析器（`loadCredentialLayers`
+等相关函数）。
+
+## 12. 一次性 headless 运行无法走真实计费路径
+
+**现状**：7 个计费 gen3d 工具（= `billingToolNames`：文生3D / 图生3D / 多视图 / 精修 /
+智能拓扑 / 绑骨 / 套动作）在判定本次调用将走真实 provider（非确定性 mock）时，经
+`tools/pre-execute` 返回 `{ kind: 'ask', reason }`（`src/index.ts` 计费审批 gate）。
+DSH 语义：ask 在审批服务缺失时 **fail-closed 降级为 deny**（`docs/dsh-api.md`
+§3.2/§3.3）。一次性 headless 组合（dsh-base + dsh-headless + dsh-gen3d、无浏览器）
+**没有审批 answerer** → `unavailable` → deny；`DSH_PERMISSION_MODE=danger-full-access`
+只会把审批 policy 从 `ask` 变 `never`（`docs/dsh-api.md` §3.5），同样确定性拒绝。
+
+**影响**：headless 一次性运行只能跑通 mock 路径（`configured: false` / `usedMock: true`）；
+真实 API 端到端只能在 **dsh web 面**经浏览器批准完成：策略 `ask` → 审批卡片 →
+批准后放行并计费。
+
+**规避**：真实链路在 web 面运行；headless 仅用于冒烟 / mock 链路验证（与
+KNOWN-GAPS #10 的 rc.8 实测方式一致）。
+
+**后续计划**：观察官方是否提供「机器策略 / 非交互 answerer」（CI 场景的自动批准）；
+若官方支持，再评估插件侧预置脚本或配置，无改动计划。
+
+## 13. 软渲染预览为视口级观感，交互视窗仅 web 会话可见
+
+**现状**：`gen3d_render_preview` 的预览图由纯 JS 软光栅渲染（Solid / Workbench 视口级
+观感）：着色 / 光照 / 地面 / 阴影齐全，但**无 PBR 贴图采样、无 SSAO、无 IBL**（环境光遮蔽
+与基于图像的照明不模拟）；交互视窗（实时查看）经 `conversation.view` 槽注入，**仅 web
+会话可见**。
+
+**影响**：预览用于形态 / 比例 / 朝向 / 布光自检可信，但**不能代表引擎内最终渲染效果**
+（贴图细节、AO 与反射缺失，材质科以 `gen3d_inspect_asset` 指标为准）；headless / CLI
+一次性运行只输出最终 text 块，用户看不到交互视窗，只能看**落盘预览文件**（PNG / GIF
+路径）与文本指引。
+
+**规避**：预览自检聚焦几何 / 比例 / 布局；贴图实际效果以 inspect 指标 + 引擎内导入为准；
+CLI 用户由工具回报预览文件路径打开查看。
+
+**后续计划**：评估软光栅内近似**贴图采样**（当前无纹理过滤）；评估 **headless-gl / GPU
+渲染路线**（真实 PBR 观感 + 性能），作为后续可选升级。
