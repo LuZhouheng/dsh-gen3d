@@ -52,7 +52,7 @@ const PROVIDER_NAMES: Record<ProviderId, string> = {
 const PROVIDER_INFO: Record<ProviderId, { models: string[]; note: string }> = {
   meshy: {
     models: ['meshy-5', 'meshy-6', 'meshy-7', 'latest', 'meshy-t1', 'meshy-t2'],
-    note: '文生两阶段（preview→refine）、图生、多视图、精修、绑骨、动作、余额查询；base64 图片输入支持',
+    note: '文生两阶段（preview→refine）、图生、多视图、精修、重拓扑（remesh）、绑骨、动作、余额查询；latest 现解析为 Meshy 7；base64 图片输入支持',
   },
   hunyuan3d: {
     models: ['hy-3d-3.0', 'hy-3d-3.1'],
@@ -453,9 +453,9 @@ export const gen3dTextTo3d = defineGen3dTool({
       description: '目标面数（1,000–300,000，越界钳制；仅 Meshy / Hunyuan 生效）',
     },
     enablePbr: { type: 'boolean', default: true, description: 'Meshy：是否追加 PBR 贴图（false 时仅几何 preview）' },
-    providerParams: { type: 'object', additionalProperties: true, description: '供应商私有参数透传（按各家官方字段，白名单过滤；Meshy 如 ai_model/pose_mode，Hunyuan 如 model/generate_type）' },
+    providerParams: { type: 'object', additionalProperties: true, description: '供应商私有参数透传（按各家官方字段，白名单过滤；Meshy：ai_model 缺省 latest=Meshy 7 代、低模风格化用 model_type=smart-topology+ai_model=meshy-t2、更精细表面用 ultra_mode=true+5 积分；Hunyuan 如 model/generate_type）' },
   },
-  billing: { credits: 3, note: 'Meshy 两阶段约 preview 1 + refine 2；各 provider 实际消耗以官方计费为准' },
+  billing: { credits: 30, note: 'Meshy 两阶段：preview 20（meshy-6/7；meshy-5/meshy-t2 为 5）+ refine 10（8k 纹理 15）；ultra_mode 另 +5；各 provider 实际消耗以官方计费为准' },
   output: { schema: resultSchema({}) },
   async run(args, exec) {
     const providerId = asProvider(args.provider, 'meshy');
@@ -510,7 +510,7 @@ export const gen3dImageTo3d = defineGen3dTool({
     enablePbr: { type: 'boolean', default: true, description: '是否启用 PBR 贴图' },
     providerParams: { type: 'object', additionalProperties: true, description: '供应商私有参数透传（白名单过滤）' },
   },
-  billing: { credits: 2, note: '各 provider 实际消耗以官方计费为准' },
+  billing: { credits: 30, note: 'Meshy 图生（meshy-6/7）：有纹理 30 / 无纹理 20 / 8K 纹理 35，ultra_mode 另 +5；meshy-t1/t2 为 30/20、5/15/20 档；各 provider 实际消耗以官方计费为准' },
   output: { schema: resultSchema({}) },
   async run(args, exec) {
     const providerId = asProvider(args.provider, 'meshy');
@@ -629,7 +629,7 @@ export const gen3dViewsTo3d = defineGen3dTool({
     enablePbr: { type: 'boolean', default: true, description: '是否启用 PBR 贴图' },
     providerParams: { type: 'object', additionalProperties: true, description: '供应商私有参数透传（白名单过滤）' },
   },
-  billing: { credits: 2, note: '各 provider 实际消耗以官方计费为准' },
+  billing: { credits: 30, note: 'Meshy 多视图（meshy-6/7）：有纹理 30 / 无纹理 20 / 8K 纹理 35；meshy-5 为 15/5；各 provider 实际消耗以官方计费为准' },
   output: { schema: resultSchema({}) },
   async run(args, exec) {
     const providerId = asProvider(args.provider, 'meshy');
@@ -705,7 +705,7 @@ export const gen3dRefineMesh = defineGen3dTool({
     assetName: { type: 'string', description: '资产名（缺省 refine-<previewTaskId>）' },
     providerParams: { type: 'object', additionalProperties: true, description: 'Meshy refine 私有参数透传（texture_resolution / texture_image_url / remove_lighting 等）' },
   },
-  billing: { credits: 2, note: 'Meshy refine 实际消耗以官方计费为准' },
+  billing: { credits: 10, note: 'Meshy refine：10 积分（texture_resolution 2k/4k）/ 15 积分（8k）；以官方计费为准' },
   output: { schema: resultSchema({}) },
   async run(args, exec) {
     const previewTaskId = asString(args.previewTaskId, 'previewTaskId', 'invalid_preview_task');

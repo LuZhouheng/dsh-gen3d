@@ -9,6 +9,8 @@
 >
 > 来源 URL（均为官方）：
 > - API 总览：https://docs.meshy.ai/en/api/
+> - 快速开始：https://docs.meshy.ai/zh/api/quick-start（入门四步：建 key → 建任务 → 轮询 → 下载；
+>   页面提及的官方 Meshy MCP server 属「AI 集成」便利通道——本插件为 DSH 原生 cordis/CLI 路线，**不使用 MCP**）
 > - 认证：https://docs.meshy.ai/en/api/authentication
 > - Text to 3D：https://docs.meshy.ai/en/api/text-to-3d
 > - Image to 3D：https://docs.meshy.ai/en/api/image-to-3d
@@ -18,6 +20,7 @@
 > - Animation：https://docs.meshy.ai/en/api/animation
 > - Animation Library（动作目录）：https://docs.meshy.ai/en/api/animation-library
 > - Asset Retention（资产保留）：https://docs.meshy.ai/en/api/asset-retention
+> - Pricing（定价）：https://docs.meshy.ai/zh/api/pricing
 > - Changelog：https://docs.meshy.ai/en/api/changelog
 > - Errors：https://docs.meshy.ai/en/api/errors
 > - Rate Limits：https://docs.meshy.ai/en/api/rate-limits
@@ -644,6 +647,28 @@ curl https://api.meshy.ai/openapi/v1/balance \
 - **并发队列超限**：429 + `NoMoreConcurrentTasks` 消息。
 
 任务处理速度还受优先级影响。实现上：创建任务失败 429 时按上述两种消息区分退避策略（队列满应等待而非立刻重试）。
+
+### 8.3 官方定价快照（2026-08-24，[Pricing](https://docs.meshy.ai/zh/api/pricing)）
+
+> 预付费积分制；以下为官方定价页当日快照（官方注明可能变动，以定价页为准）。
+> 插件侧 `billing.credits` 已按本表对齐（审批 gate 展示预计消耗）。
+
+| API | 积分/次 |
+|---|---|
+| Text to 3D Preview（网格） | meshy-6/低面数模型 20；**meshy-7 20**（`ultra_mode` 另 +5）；smart-topology（meshy-t2）5；其他（meshy-5）5 |
+| Text to 3D Refine（贴图） | 10（texture_resolution 2k/4k）；15（8k） |
+| Image to 3D | meshy-6/7：20（无纹理）/ 30（有纹理）/ 35（8K），`ultra_mode` 另 +5；meshy-t1 同档；meshy-t2：5/15/20；其他：5/15 |
+| Multi-Image to 3D | meshy-6/7：20/30/35（同 Image to 3D）；其他：5/15 |
+| Retexture | 10（2k/4k）；15（8k） |
+| **Remesh** | **5** |
+| Convert / Resize | 各 1 |
+| **Auto Rigging（绑骨）** | **5** |
+| **Animation（套动作）** | **3** |
+| Text/Image to Image | 3–12（nano-banana / gpt-image-2 分档；本插件未实现） |
+| 多色打印 / 可打印性修复 | 各 10；可打印性分析免费 |
+| 创意工坊（7 产品） | Prototype 6（键帽 12）；Build 30（键帽 50） |
+
+参考换算：一个「文生 + 绑骨 + 一个动作」的角色全链约 **38 积分**（30 + 5 + 3）。
 
 ---
 

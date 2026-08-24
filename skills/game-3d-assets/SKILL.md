@@ -38,6 +38,7 @@ description: 为 3D 游戏创建生产级资产（角色 / 道具 / 环境）的
    - 有设定图 / 参考图：`gen3d_image_to_3d`（单视角）或 `gen3d_views_to_3d`（多角度，front 必填）——**有图就别弃图走文生**
    - 无设定图：`gen3d_text_to_3d` 先文生，再看结果决定是否精修
    - 角色要动作：生成时 `providerParams.pose_mode: 'a-pose'`（Meshy）；`enablePbr` 默认开（要贴图就别关）
+   - Meshy 模型代际：缺省即 `latest`（现解析为 **Meshy 7** 代，最高细节几何）；要更精细表面加 `ultra_mode: true`（仅 meshy-7/latest、仅文生 preview/图生，+5 积分）；要省积分或保旧代行为显式 `ai_model: 'meshy-5' / 'meshy-6'`
    - 需要动作的角色：`gen3d_auto_rig` 绑骨（仅 `characters` 槽）→ `gen3d_list_motions` 查目录 → `gen3d_apply_motion`（一次一个动作、按动作幂等）→ playable 五工具（`gen3d_get_playable_profile` / `gen3d_set_playable_profile` / `gen3d_set_playable_motion_mapping` / `gen3d_export_playable_character` / `gen3d_adopt_playable_character`）导出游戏可用交付
    - 高模降面到预算：`gen3d_retopo_lowpoly`（`provider: 'meshy'`，官方 Remesh API，5 积分/次）——源资产保留、产出规整低面数新资产；适用 inspect 超面数或生成时未控面数的资产
    - 道具 / 环境件：`assetSlot: 'meshes'`，不绑骨（软门控只认 characters 槽）
@@ -49,7 +50,7 @@ description: 为 3D 游戏创建生产级资产（角色 / 道具 / 环境）的
    - `gen3d_rename_asset` 规范命名 → 交付：资产路径 + 规格摘要 + 预算对照结果
 
 5. **效率与传参纪律**：
-   - **如实转达配额消耗**：工具返回的 credits / 配额信息必须告诉用户，不隐瞒
+   - **如实转达配额消耗**：工具返回的 credits / 配额信息必须告诉用户，不隐瞒。常用档位速查（2026-08 官方定价，以工具 billing note 与官方 pricing 页为准）：文生两阶段 30（preview 20 + refine 10；meshy-5/meshy-t2 preview 仅 5）、图生/多视图有纹理 30（无纹理 20）、refine 10（8k 15）、remesh 5、绑骨 5、动作 3——一个「生成+绑骨+一个动作」的角色全链约 38 积分
    - 同参数重跑命中缓存（`cacheHit: true`）复用旧资产不重复烧配额——先看结果再决定要不要重试
    - `providerParams` 只放**白名单字段**（Meshy 如 `ai_model` / `model_type` / `target_polycount` / `pose_mode` / `should_remesh` / `decimation_mode` / `topology` / `origin_at`），无关字段会被过滤忽略，别指望透传私有字段
    - 长任务返回 `{ kind: 'background', jobId }` 句柄：用 `job_output` 查进度（平台没有 `job_read`）、`job_kill` 终止
