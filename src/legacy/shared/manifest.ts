@@ -10,7 +10,9 @@ import type { CharacterMotionOverride, MotionMappingDraft } from './playable-pro
 
 export type ProviderId = 'meshy' | 'hunyuan_workflow' | 'hunyuan_rest' | 'rodin';
 
-export type GenerationMode = 'text' | 'image' | 'views' | 'refine';
+// 生成阶段模式。`rig` / `motion` 仅用于绑骨 / 套动作的审计记录
+// （AuditRecord.mode）；sidecar custom.mode 仍只写生成阶段值（text/image/views/refine）。
+export type GenerationMode = 'text' | 'image' | 'views' | 'refine' | 'rig' | 'motion';
 
 // Provider mode tag. `mock` marks no-quota deterministic fixtures so a manifest
 // produced without a real call is never mistaken for a real generation.

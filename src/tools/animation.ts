@@ -24,6 +24,7 @@ import type {
   ProviderId,
   TaskResult,
 } from '../providers/types.js';
+import type { Gen3dStore } from '../storage.js';
 import {
   appendDerivedFiles,
   clearRigAndMotions,
@@ -68,6 +69,21 @@ function freeMotionRef(category: 'walking' | 'running'): MotionRef {
 /** motionRef 的稳定性键（沿用 legacy motionRefKey）。 */
 function motionRefKeyOf(ref: MotionRef): string {
   return `${ref.system}:${ref.id}`;
+}
+
+/**
+ * 绑骨 / 套动作的 submit 审计（与生成类 generateCacheFirst 的 submit 事件
+ * 对齐；cacheKey 不填）。只在 appendDerivedFiles 成功之后调用：成功落盘的
+ * 计费提交才有账。
+ */
+async function auditSubmit(
+  store: Gen3dStore,
+  provider: ProviderId,
+  mode: 'rig' | 'motion',
+  sourceJobId: string | null,
+  assetPath: string,
+): Promise<void> {
+  await store.appendAudit({ ts: new Date().toISOString(), provider, mode, event: 'submit', sourceJobId, assetPath });
 }
 
 // ── 校验辅助 ────────────────────────────────────────────────────────────────
@@ -306,6 +322,7 @@ export const gen3dAutoRig = defineGen3dTool({
     if (!provider) {
       const outcome = mockRig(assetPath, target);
       const manifest = await appendDerivedFiles({ assetPath, files: outcome.files, skeleton: outcome.skeleton, rigChain: outcome.rigChain });
+      await auditSubmit(store, target, 'rig', outcome.rigChain.rigTaskId, assetPath);
       return { ok: true, usedMock: true, assetPath, manifest };
     }
 
@@ -327,6 +344,7 @@ export const gen3dAutoRig = defineGen3dTool({
       outcome = await meshyRig(provider, sourceJobId, heightMeters, exec);
     }
     const manifest = await appendDerivedFiles({ assetPath, files: outcome.files, skeleton: outcome.skeleton, rigChain: outcome.rigChain });
+    await auditSubmit(store, target, 'rig', outcome.rigChain.rigTaskId, assetPath);
     return { ok: true, usedMock: false, assetPath, manifest };
   },
 });
@@ -382,6 +400,7 @@ export const gen3dApplyMotion = defineGen3dTool({
           { role: 'animated_model', format: 'fbx', data: mockModelBytes(`motion-tripo-${preset}-fbx:${assetPath}`), motionRef: ref },
         ];
         const manifest = await appendDerivedFiles({ assetPath, files });
+        await auditSubmit(store, 'tripo3d', 'motion', `mock-motion:${ref.system}-${ref.id}`, assetPath);
         return { ok: true, usedMock: true, assetPath, manifest };
       }
       if (typeof provider.submitAnimation !== 'function') {
@@ -392,6 +411,7 @@ export const gen3dApplyMotion = defineGen3dTool({
       const result = await provider.pollTask(handle, { signal: exec.signal });
       const files = await animationFilesFromDownloads('tripo3d', handle.taskId, result, ref, exec);
       const manifest = await appendDerivedFiles({ assetPath, files });
+      await auditSubmit(store, 'tripo3d', 'motion', handle.taskId, assetPath);
       return { ok: true, usedMock: false, assetPath, manifest };
     }
 
@@ -414,6 +434,7 @@ export const gen3dApplyMotion = defineGen3dTool({
           { role: 'animated_model', format: 'fbx', data: mockModelBytes(`motion-hunyuan-${motionTypeRaw}-fbx:${assetPath}`), motionRef: ref },
         ];
         const manifest = await appendDerivedFiles({ assetPath, files });
+        await auditSubmit(store, 'hunyuan3d', 'motion', `mock-motion:${ref.system}-${ref.id}`, assetPath);
         return { ok: true, usedMock: true, assetPath, manifest };
       }
       if (typeof provider.submitAnimation !== 'function') {
@@ -432,6 +453,7 @@ export const gen3dApplyMotion = defineGen3dTool({
       const result = await provider.pollTask(handle, { signal: exec.signal });
       const files = await animationFilesFromDownloads('hunyuan3d', handle.taskId, result, ref, exec);
       const manifest = await appendDerivedFiles({ assetPath, files });
+      await auditSubmit(store, 'hunyuan3d', 'motion', handle.taskId, assetPath);
       return { ok: true, usedMock: false, assetPath, manifest };
     }
 
@@ -450,6 +472,7 @@ export const gen3dApplyMotion = defineGen3dTool({
         { role: 'animated_model', format: 'fbx', data: mockModelBytes(`motion-meshy-${actionId}-fbx:${assetPath}`), motionRef: ref },
       ];
       const manifest = await appendDerivedFiles({ assetPath, files });
+      await auditSubmit(store, 'meshy', 'motion', `mock-motion:${ref.system}-${ref.id}`, assetPath);
       return { ok: true, usedMock: true, assetPath, manifest };
     }
 
@@ -467,6 +490,7 @@ export const gen3dApplyMotion = defineGen3dTool({
       const sourceJobId = sidecar.custom.meshyTaskRefs?.resultTaskId ?? sidecar.custom.sourceJobId;
       const outcome = await meshyRig(provider, sourceJobId, undefined, exec);
       await appendDerivedFiles({ assetPath, files: outcome.files, skeleton: outcome.skeleton, rigChain: outcome.rigChain });
+      await auditSubmit(store, 'meshy', 'rig', outcome.rigChain.rigTaskId, assetPath);
     }
     const rigTaskId = (await store.readSidecar(assetPath))?.custom.rig?.rigTaskId;
     if (!rigTaskId) {
@@ -487,6 +511,7 @@ export const gen3dApplyMotion = defineGen3dTool({
       throw new ToolError('provider_empty_download', `Meshy 套动作任务成功但无动画资产（${handle.taskId}）`);
     }
     const manifest = await appendDerivedFiles({ assetPath, files });
+    await auditSubmit(store, 'meshy', 'motion', handle.taskId, assetPath);
     return { ok: true, usedMock: false, assetPath, manifest };
   },
 });

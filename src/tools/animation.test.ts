@@ -363,3 +363,123 @@ describe('gen3d_list_motions', () => {
     expect(out).toMatchObject({ ok: true, system: 'tripo3d', total: 1 });
   });
 });
+
+describe('submit 审计（rig / motion）', () => {
+  let tmp: TempStore;
+  beforeEach(() => {
+    tmp = makeStore();
+    configureToolDeps({ store: tmp.store });
+  });
+  afterEach(() => {
+    configureToolDeps({});
+    tmp.cleanup();
+  });
+
+  const submits = async () => (await tmp.store.listAudit()).filter((r) => r.event === 'submit');
+
+  it('Meshy 真实绑骨：audit 写 mode:rig submit，sourceJobId 为真实 task id', async () => {
+    const assetPath = await seedMeshAsset(tmp);
+    const fake = new FakeProvider('meshy', true);
+    fake.handlers.getBalance = () => Promise.resolve({ balance: 100 });
+    fake.handlers.submitRig = () => Promise.resolve({ provider: 'meshy', taskId: 'rig-1' });
+    fake.handlers.pollTask = () => Promise.resolve(rigTaskResult('rig-1'));
+    configureToolDeps({ store: tmp.store, providerFactory: factory(fake) });
+    const out = await gen3dAutoRig.execute({ assetPath, rigProvider: 'meshy' }, EXEC);
+    expect(out).toMatchObject({ ok: true });
+    expect(await submits()).toContainEqual(
+      expect.objectContaining({ provider: 'meshy', mode: 'rig', event: 'submit', sourceJobId: 'rig-1', assetPath }),
+    );
+  });
+
+  it('Meshy 真实套动作：audit 写 mode:motion submit，sourceJobId 为真实 task id', async () => {
+    const assetPath = await seedRiggedAsset(tmp, { rigProvider: 'meshy', rigTaskId: 'rig-1', rigExpiresAt: FUTURE });
+    const fake = new FakeProvider('meshy', true);
+    fake.handlers.getBalance = () => Promise.resolve({ balance: 50 });
+    fake.handlers.submitAnimation = () => Promise.resolve({ provider: 'meshy', taskId: 'anim-1' });
+    fake.handlers.pollTask = () =>
+      Promise.resolve(
+        meshyResult('anim-1', [{ role: 'animation_glb', format: 'glb', url: 'u/a.glb', buffer: glbBytes('a') }]),
+      );
+    configureToolDeps({ store: tmp.store, providerFactory: factory(fake) });
+    const out = await gen3dApplyMotion.execute({ assetPath, actionId: 101 }, EXEC);
+    expect(out).toMatchObject({ ok: true });
+    expect(await submits()).toContainEqual(
+      expect.objectContaining({ provider: 'meshy', mode: 'motion', event: 'submit', sourceJobId: 'anim-1', assetPath }),
+    );
+  });
+
+  it('mock 绑骨：audit 也写 mode:rig submit（sourceJobId=mock-rig:…）', async () => {
+    const assetPath = await seedMeshAsset(tmp);
+    configureToolDeps({
+      store: tmp.store,
+      providerFactory: async (id) => new FakeProvider(id as 'meshy', false),
+    });
+    const out = await gen3dAutoRig.execute({ assetPath }, EXEC);
+    expect(out).toMatchObject({ ok: true, usedMock: true });
+    expect(await submits()).toContainEqual(
+      expect.objectContaining({ provider: 'meshy', mode: 'rig', event: 'submit', sourceJobId: `mock-rig:${assetPath}`, assetPath }),
+    );
+  });
+
+  it('mock 套动作（meshy / hunyuan / tripo）：audit 各写 mode:motion submit（sourceJobId=mock-motion:…）', async () => {
+    configureToolDeps({
+      store: tmp.store,
+      providerFactory: async (id) => new FakeProvider(id as 'meshy', false),
+    });
+    const meshyPath = await seedRiggedAsset(tmp, { rigProvider: 'meshy', rigTaskId: 'rig-1', rigExpiresAt: FUTURE });
+    await gen3dApplyMotion.execute({ assetPath: meshyPath, actionId: 101 }, EXEC);
+    expect(await submits()).toContainEqual(
+      expect.objectContaining({ provider: 'meshy', mode: 'motion', event: 'submit', sourceJobId: 'mock-motion:meshy-101', assetPath: meshyPath }),
+    );
+
+    const hyPath = await seedRiggedAsset(tmp, { rigProvider: 'hunyuan3d', rigTaskId: 'hy-rig', rigExpiresAt: null });
+    await gen3dApplyMotion.execute({ assetPath: hyPath, motionType: 23 }, EXEC);
+    expect(await submits()).toContainEqual(
+      expect.objectContaining({ provider: 'hunyuan3d', mode: 'motion', event: 'submit', sourceJobId: 'mock-motion:hunyuan_v1-23', assetPath: hyPath }),
+    );
+
+    const tPath = await seedRiggedAsset(tmp, { rigProvider: 'tripo3d', rigTaskId: 't-rig', rigExpiresAt: null });
+    await gen3dApplyMotion.execute({ assetPath: tPath, preset: 'walk' }, EXEC);
+    expect(await submits()).toContainEqual(
+      expect.objectContaining({ provider: 'tripo3d', mode: 'motion', event: 'submit', sourceJobId: 'mock-motion:hunyuan_v2-preset:walk', assetPath: tPath }),
+    );
+  });
+
+  it('autoReRig 重绑：真实重绑 + 套动作各写一条 submit（rig + motion）', async () => {
+    const assetPath = await seedRiggedAsset(tmp, { rigProvider: 'meshy', rigTaskId: 'rig-old', rigExpiresAt: PAST });
+    const fake = new FakeProvider('meshy', true);
+    fake.handlers.getBalance = () => Promise.resolve({ balance: 100 });
+    fake.handlers.submitRig = () => Promise.resolve({ provider: 'meshy', taskId: 'rig-new' });
+    fake.handlers.pollTask = (handle) =>
+      handle.taskId === 'rig-new'
+        ? Promise.resolve(rigTaskResult('rig-new'))
+        : Promise.resolve(meshyResult('anim-1', [{ role: 'animation_glb', format: 'glb', url: 'u/a.glb', buffer: glbBytes('a') }]));
+    fake.handlers.submitAnimation = () => Promise.resolve({ provider: 'meshy', taskId: 'anim-1' });
+    configureToolDeps({ store: tmp.store, providerFactory: factory(fake) });
+    const out = await gen3dApplyMotion.execute({ assetPath, actionId: 101, autoReRig: true }, EXEC);
+    expect(out).toMatchObject({ ok: true });
+    const audit = await submits();
+    expect(audit).toContainEqual(expect.objectContaining({ mode: 'rig', event: 'submit', sourceJobId: 'rig-new', assetPath }));
+    expect(audit).toContainEqual(expect.objectContaining({ mode: 'motion', event: 'submit', sourceJobId: 'anim-1', assetPath }));
+  });
+
+  it('幂等命中（已绑骨 / 已套该动作）不新增 submit 审计行', async () => {
+    const rigPath = await seedRiggedAsset(tmp, { rigProvider: 'meshy', rigTaskId: 'rig-x', rigExpiresAt: FUTURE });
+    configureToolDeps({ store: tmp.store, providerFactory: factory(new FakeProvider('meshy', true)) });
+    await gen3dAutoRig.execute({ assetPath: rigPath }, EXEC);
+    expect(await submits()).toHaveLength(0);
+
+    const fake = new FakeProvider('meshy', true);
+    fake.handlers.getBalance = () => Promise.resolve({ balance: 50 });
+    fake.handlers.submitAnimation = () => Promise.resolve({ provider: 'meshy', taskId: 'anim-1' });
+    fake.handlers.pollTask = () =>
+      Promise.resolve(
+        meshyResult('anim-1', [{ role: 'animation_glb', format: 'glb', url: 'u/a.glb', buffer: glbBytes('a') }]),
+      );
+    configureToolDeps({ store: tmp.store, providerFactory: factory(fake) });
+    await gen3dApplyMotion.execute({ assetPath: rigPath, actionId: 101 }, EXEC);
+    const countAfterFirst = (await submits()).length;
+    await gen3dApplyMotion.execute({ assetPath: rigPath, actionId: 101 }, EXEC);
+    expect(await submits()).toHaveLength(countAfterFirst);
+  });
+});
