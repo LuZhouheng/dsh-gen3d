@@ -372,7 +372,7 @@ const overlayStyle: CSSProperties = {
 const animBarStyle: CSSProperties = {
   position: 'absolute',
   left: 12,
-  bottom: 12,
+  top: 12, // 顶左：底部会被会话视图悬浮输入框遮住（2026-08-25 用户实证控制条不可见）
   display: 'flex',
   gap: 8,
   alignItems: 'center',
