@@ -10,7 +10,11 @@
  *   10min 超时，失败终态立即抛）→ 下载资产并校验 GLB magic；
  * - 错误统一映射到 provider_* 契约错误码（src/providers/types.ts 的 ProviderError）；
  * - 所有 HTTP 经依赖注入 fetchImpl（默认 resolveFetchImpl 的原生 fetch），
- *   单测一律 mock fetch 不打真网。
+ *   单测一律 mock fetch 不打真网；
+ * - 传输韧性（KNOWN-GAPS §14，2026-08-25 真实 E2E 教训）：幂等 GET（轮询 / 余额 /
+ *   资产下载，body 读取一并纳入重试单元）对网络类失败与 408/429/5xx 按指数退避
+ *   重试；POST 提交不重试（盲重试可能重复建任务重复计费），网络失败消息附
+ *   防重复计费 / 任务恢复指引。
  *
  * 实现同时满足两层：
  * 1. src/providers/types.ts 的统一 Gen3dProvider 接口（submitGeneration /
@@ -53,6 +57,18 @@ export const DEFAULT_POLL_INTERVAL_MS = 5_000
 /** 轮询默认总超时：10min */
 export const DEFAULT_POLL_TIMEOUT_MS = 600_000
 
+/**
+ * 幂等 GET（轮询 / 余额 / 资产下载）的传输重试策略：网络类失败（fetch failed /
+ * 连接重置 / body 读取中断）与 RETRYABLE_STATUSES 按 1.5s→3s→6s→12s 退避，共 5 次
+ * 尝试。背景：fake-IP 代理环境到 api.meshy.ai / assets.meshy.ai 的 TCP/TLS 间歇重置
+ * （实测单请求延迟抖动达 10s 级），单次失败曾使整个后台任务作废并诱发重复计费。
+ */
+export const IDEMPOTENT_RETRY_ATTEMPTS = 5
+export const IDEMPOTENT_RETRY_BASE_MS = 1_500
+export const IDEMPOTENT_RETRY_MAX_MS = 20_000
+/** 幂等 GET 上也可重试的响应状态码（限流 / 服务端瞬态） */
+export const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([408, 425, 429, 500, 502, 503, 504])
+
 // ── 错误类型（契约 ProviderError 的 Meshy 子类） ─────────────────────────────
 
 export interface MeshyProviderErrorOptions {
@@ -77,6 +93,18 @@ export class MeshyProviderError extends ProviderError {
     if (opts.taskId !== undefined) this.taskId = opts.taskId
     if (opts.taskStatus !== undefined) this.taskStatus = opts.taskStatus
   }
+}
+
+/**
+ * request() 的重试策略标记：
+ * - 幂等 GET（轮询 / 余额 / 下载）：传 idempotentTaskId（无任务上下文给 null）启用
+ *   传输重试；携带 taskId 时最终失败的消息附「任务可能已在云端成功，按 id 恢复」指引；
+ * - POST 提交：submit: true，单次尝试不重试（防重复建任务重复计费），失败消息附
+ *   「先核对云端任务列表」指引。
+ */
+interface RequestPolicy {
+  idempotentTaskId?: string | null
+  submit?: boolean
 }
 
 // ── 任务句柄 / 结果（Meshy 专属能力面，结构兼容契约 TaskHandle / TaskResult） ─
@@ -484,7 +512,7 @@ export class MeshyProvider implements Gen3dProvider {
       method: 'GET',
       headers: { Authorization: `Bearer ${key}` },
       signal: opts?.signal,
-    })
+    }, { idempotentTaskId: null })
     if (!resp.ok) throw await this.mapHttpError(resp)
     const body = await parseJsonResponse(resp, 'balance 响应')
     const balance = (body as { balance?: unknown }).balance
@@ -545,12 +573,46 @@ export class MeshyProvider implements Gen3dProvider {
     return key
   }
 
-  private async request(url: string, init: RequestInit): Promise<Response> {
-    try {
-      return await this.fetchImpl(url, init)
-    } catch (err) {
-      throw this.mapNetworkError(err)
+  /**
+   * HTTP 统一入口。幂等 GET（policy.idempotentTaskId，含 null）对网络类失败与
+   * RETRYABLE_STATUSES 按指数退避重试，且把 body 读取（arrayBuffer）纳入重试单元
+   * ——大文件下载的中途中断与连接失败同等重试，返回的 Response 携带内存 body；
+   * POST 提交（policy.submit）单次尝试不重试（防重复计费），失败消息附指引。
+   * abort（含重试退避期间被取消）立即上抛，不重试。
+   */
+  private async request(url: string, init: RequestInit, policy?: RequestPolicy): Promise<Response> {
+    const retry = policy !== undefined && 'idempotentTaskId' in policy
+    const maxAttempts = retry ? IDEMPOTENT_RETRY_ATTEMPTS : 1
+    let lastErr: unknown
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const resp = await this.fetchImpl(url, init)
+        if (!retry) return resp
+        if (RETRYABLE_STATUSES.has(resp.status) && attempt < maxAttempts) {
+          await this.sleep(this.retryDelayMs(attempt), init.signal ?? undefined)
+          continue
+        }
+        // body 读取纳入重试范围：中途中断抛错 → 与连接失败走同一重试路径
+        const body = new Uint8Array(await resp.arrayBuffer())
+        return new Response(body.byteLength === 0 ? null : body, {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: resp.headers,
+        })
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') throw err // 调用方取消：不重试
+        if (init.signal?.aborted) throw err
+        lastErr = err
+        if (attempt >= maxAttempts) throw this.mapNetworkError(err, policy)
+        await this.sleep(this.retryDelayMs(attempt), init.signal ?? undefined)
+      }
     }
+    throw this.mapNetworkError(lastErr, policy)
+  }
+
+  /** 传输重试退避：1.5s → 3s → 6s → 12s（封顶 20s）。attempt 为刚失败的次数（1 起）。 */
+  private retryDelayMs(attempt: number): number {
+    return Math.min(IDEMPOTENT_RETRY_BASE_MS * 2 ** (attempt - 1), IDEMPOTENT_RETRY_MAX_MS)
   }
 
   private async submit(
@@ -564,7 +626,7 @@ export class MeshyProvider implements Gen3dProvider {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify(payload),
       signal: opts?.signal,
-    })
+    }, { submit: true })
     if (!resp.ok) throw await this.mapHttpError(resp)
     const body = await parseJsonResponse(resp, 'submit 响应')
     const result = (body as { result?: unknown }).result
@@ -582,7 +644,7 @@ export class MeshyProvider implements Gen3dProvider {
     const resp = await this.request(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${key}` },
-    })
+    }, { idempotentTaskId: handle.taskId })
     if (!resp.ok) throw await this.mapHttpError(resp, { taskId: handle.taskId })
     const body = await parseJsonResponse(resp, '轮询响应')
     if (typeof body !== 'object' || body === null) {
@@ -599,12 +661,12 @@ export class MeshyProvider implements Gen3dProvider {
     task: Record<string, unknown>,
   ): Promise<MeshyTaskResult> {
     const { main, basic } = extractResultUrls(task, handle.kind)
-    const files = await this.downloadFiles(Object.entries(main))
+    const files = await this.downloadFiles(Object.entries(main), handle.taskId)
     const basicAnimations: MeshyBasicAnimation[] = []
     for (const category of ['walking', 'running'] as const) {
       const categoryUrls = basic[category]
       if (categoryUrls === undefined || Object.keys(categoryUrls).length === 0) continue
-      const categoryFiles = await this.downloadFiles(Object.entries(categoryUrls))
+      const categoryFiles = await this.downloadFiles(Object.entries(categoryUrls), handle.taskId)
       basicAnimations.push({ category, files: categoryFiles })
     }
     if (files.length === 0 && basicAnimations.length === 0) {
@@ -631,10 +693,13 @@ export class MeshyProvider implements Gen3dProvider {
     }
   }
 
-  private async downloadFiles(entries: readonly [role: string, url: string][]): Promise<MeshyResultFile[]> {
+  private async downloadFiles(
+    entries: readonly [role: string, url: string][],
+    taskId?: string,
+  ): Promise<MeshyResultFile[]> {
     return Promise.all(
       entries.map(async ([role, url]) => {
-        const buffer = await this.downloadFile(url)
+        const buffer = await this.downloadFile(url, taskId)
         const format = inferFormat(role, url)
         if (format === 'glb' && !isGlbBytes(buffer)) {
           throw new MeshyProviderError(
@@ -648,20 +713,21 @@ export class MeshyProvider implements Gen3dProvider {
     )
   }
 
-  /** 下载签名 URL 资产。签名 URL 无需认证头；HTTP 失败按 provider_http_error，空内容按 provider_empty_download */
-  private async downloadFile(url: string): Promise<Uint8Array> {
-    const resp = await this.request(url, { method: 'GET' })
+  /** 下载签名 URL 资产（幂等 GET：传输重试由 request 承担，body 读取中断亦覆盖）。签名 URL 无需认证头；HTTP 失败按 provider_http_error，空内容按 provider_empty_download */
+  private async downloadFile(url: string, taskId?: string): Promise<Uint8Array> {
+    const resp = await this.request(url, { method: 'GET' }, { idempotentTaskId: taskId ?? null })
     if (!resp.ok) {
       throw new MeshyProviderError(
         'provider_http_error',
         `资产下载失败 HTTP ${resp.status}（签名 URL 可能已过期）：${url}`,
-        { status: resp.status, retryable: false },
+        { status: resp.status, retryable: false, taskId },
       )
     }
     const buffer = new Uint8Array(await resp.arrayBuffer())
     if (buffer.byteLength === 0) {
       throw new MeshyProviderError('provider_empty_download', `资产下载内容为空：${url}`, {
         retryable: false,
+        taskId,
       })
     }
     return buffer
@@ -680,15 +746,25 @@ export class MeshyProvider implements Gen3dProvider {
     })
   }
 
-  private mapNetworkError(err: unknown): MeshyProviderError {
+  private mapNetworkError(err: unknown, policy?: RequestPolicy): MeshyProviderError {
     if (err instanceof Error && err.name === 'AbortError') {
       // 调用方取消：原样上抛，让上层区分"取消"与"失败"
       throw err
     }
     const message = err instanceof Error ? err.message : String(err)
-    return new MeshyProviderError('provider_http_error', `网络请求失败：${message}`, {
+    // 恢复指引（KNOWN-GAPS §14）：取回侧失败时云端任务可能已成功，盲重提交会重复计费
+    let hint = ''
+    let taskId: string | undefined
+    if (policy?.submit === true) {
+      hint = '；提交请求可能已到达云端并创建了任务，重新提交前请先经 Meshy 任务列表核对，避免重复计费'
+    } else if (typeof policy?.idempotentTaskId === 'string') {
+      taskId = policy.idempotentTaskId
+      hint = `；任务 ${taskId} 可能已在云端成功，可用该任务 id（如 gen3d_retopo_lowpoly 的 originalTaskId）接回成果，避免重复计费`
+    }
+    return new MeshyProviderError('provider_http_error', `网络请求失败：${message}${hint}`, {
       retryable: true,
       cause: err,
+      taskId,
     })
   }
 

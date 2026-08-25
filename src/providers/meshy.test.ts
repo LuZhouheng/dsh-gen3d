@@ -1158,3 +1158,148 @@ describe('remesh 轮询与下载（role 映射）', () => {
     expect(result.downloads.textureUrls).toBeUndefined()
   })
 })
+
+describe('传输重试（幂等 GET；KNOWN-GAPS §14 修复）', () => {
+  /** body 读取中途失败的 Response（模拟大文件下载到一半被重置） */
+  function brokenBodyResp(part: Uint8Array): Response {
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(part)
+        c.error(new Error('mid-body reset'))
+      },
+    })
+    return new Response(stream, { status: 200 })
+  }
+
+  it('轮询：网络失败（fetch failed）按退避重试后成功，任务不中断', async () => {
+    const TASK = 'retry-poll-1'
+    let pollCount = 0
+    const { fetchImpl } = mockFetch([
+      {
+        test: /\/text-to-3d\/retry-poll-1$/,
+        handler: () => {
+          pollCount += 1
+          if (pollCount <= 2) throw new Error('fetch failed')
+          return jsonResp({
+            id: TASK,
+            status: 'SUCCEEDED',
+            model_urls: { glb: 'https://cdn.example.com/r.glb' },
+          })
+        },
+      },
+      { test: /^https:\/\/cdn\.example\.com\//, handler: () => bytesResp(GLB_BYTES) },
+    ])
+    const provider = new MeshyProvider({ fetchImpl, sleep: async () => {} })
+    const result = await provider.pollTask(handle(TASK), { intervalMs: 0 })
+    expect(result.status).toBe('succeeded')
+    expect(pollCount).toBe(3)
+  })
+
+  it('轮询：重试耗尽后抛 provider_http_error，消息带任务 id 与恢复指引', async () => {
+    let pollCount = 0
+    const { fetchImpl } = mockFetch([
+      {
+        test: /\/text-to-3d\/retry-dead-1$/,
+        handler: () => {
+          pollCount += 1
+          throw new Error('fetch failed')
+        },
+      },
+    ])
+    const provider = new MeshyProvider({ fetchImpl, sleep: async () => {} })
+    const error = await provider.pollTask(handle('retry-dead-1'), { intervalMs: 0 }).catch((e: unknown) => e)
+    expect(error).toMatchObject({ code: 'provider_http_error', taskId: 'retry-dead-1', retryable: true })
+    expect((error as Error).message).toContain('retry-dead-1')
+    expect((error as Error).message).toContain('避免重复计费')
+    expect(pollCount).toBe(5) // IDEMPOTENT_RETRY_ATTEMPTS
+  })
+
+  it('轮询：429 / 503 响应也按退避重试后成功', async () => {
+    const TASK = 'retry-5xx-1'
+    let pollCount = 0
+    const { fetchImpl } = mockFetch([
+      {
+        test: /\/text-to-3d\/retry-5xx-1$/,
+        handler: () => {
+          pollCount += 1
+          if (pollCount === 1) return jsonResp({ message: 'RateLimitExceeded' }, 429)
+          if (pollCount === 2) return jsonResp({ message: 'unavailable' }, 503)
+          return jsonResp({
+            id: TASK,
+            status: 'SUCCEEDED',
+            model_urls: { glb: 'https://cdn.example.com/r.glb' },
+          })
+        },
+      },
+      { test: /^https:\/\/cdn\.example\.com\//, handler: () => bytesResp(GLB_BYTES) },
+    ])
+    const provider = new MeshyProvider({ fetchImpl, sleep: async () => {} })
+    const result = await provider.pollTask(handle(TASK), { intervalMs: 0 })
+    expect(result.status).toBe('succeeded')
+    expect(pollCount).toBe(3)
+  })
+
+  it('下载：body 中途中断纳入重试单元，整体重试后成功', async () => {
+    const TASK = 'retry-dl-1'
+    let dlCount = 0
+    const { fetchImpl } = mockFetch([
+      {
+        test: /\/text-to-3d\/retry-dl-1$/,
+        handler: () =>
+          jsonResp({ id: TASK, status: 'SUCCEEDED', model_urls: { glb: 'https://cdn.example.com/r.glb' } }),
+      },
+      {
+        test: /^https:\/\/cdn\.example\.com\//,
+        handler: () => {
+          dlCount += 1
+          return dlCount < 3 ? brokenBodyResp(GLB_BYTES) : bytesResp(GLB_BYTES)
+        },
+      },
+    ])
+    const provider = new MeshyProvider({ fetchImpl, sleep: async () => {} })
+    const result = await provider.pollTask(handle(TASK), { intervalMs: 0 })
+    expect(result.status).toBe('succeeded')
+    expect(result.files[0]?.buffer).toEqual(GLB_BYTES)
+    expect(dlCount).toBe(3)
+  })
+
+  it('提交（POST）不重试：网络失败单次尝试，消息附防重复计费指引', async () => {
+    let submitCount = 0
+    const { fetchImpl } = mockFetch([
+      {
+        test: /\/openapi\/v2\/text-to-3d$/,
+        handler: () => {
+          submitCount += 1
+          throw new Error('fetch failed')
+        },
+      },
+    ])
+    const provider = new MeshyProvider({ fetchImpl, sleep: async () => {} })
+    const error = await provider.textTo3dPreview({ prompt: 'knight' }).catch((e: unknown) => e)
+    expect(error).toMatchObject({ code: 'provider_http_error', retryable: true })
+    expect(submitCount).toBe(1)
+    expect((error as Error).message).toContain('任务列表')
+    expect((error as Error).message).toContain('避免重复计费')
+  })
+
+  it('取消（abort）不重试：原样上抛 AbortError', async () => {
+    let pollCount = 0
+    const { fetchImpl } = mockFetch([
+      {
+        test: /\/text-to-3d\/retry-abort-1$/,
+        handler: (_url, init) => {
+          pollCount += 1
+          if (init?.signal?.aborted) return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'))
+          return jsonResp({ id: 'retry-abort-1', status: 'IN_PROGRESS' })
+        },
+      },
+    ])
+    const provider = new MeshyProvider({ fetchImpl, sleep: async () => {} })
+    const ac = new AbortController()
+    const pending = provider.pollTask(handle('retry-abort-1'), { intervalMs: 0, signal: ac.signal })
+    queueMicrotask(() => ac.abort())
+    const error = await pending.catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(DOMException)
+    expect((error as DOMException).name).toBe('AbortError')
+  })
+})
