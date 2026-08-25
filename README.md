@@ -138,7 +138,7 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 
 ## 已知缺口
 
-当前实现的已知能力边界（十四条，每条含**影响 / 规避方式 / 后续计划**）见 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md)。要点速览：
+当前实现的已知能力边界（十六条，每条含**影响 / 规避方式 / 后续计划**）见 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md)。要点速览：
 
 - **Hunyuan 套动作**：`apply-motion` 的 Hunyuan 路由暂不可用——官方 48 预设动作目前只能绑骨时经 `motionType` 顺带，独立套动作待挂接 `SubmitHunyuanTo3DMotionJob`
 - **Tripo 绑骨**：仅限 Tripo 自身生成的资产；外部 GLB 的 `import_model` 导入链路未实现
@@ -181,6 +181,7 @@ rc.7 起支持的插件自注册设置卡片，见 [docs/dsh-api.md](docs/dsh-ap
 
 ```
 dsh-gen3d/
+├── AGENTS.md             # agent 交接：构建/测试命令 + 结构入口 + 红线（密钥零内置 / 宿主包 peer 化 / 计费不盲重试 / tarball 分发）
 ├── package.json          # npm 包 + dsh.bundle 元数据（patch → ./cordis.patch.yml）+ dsh.client（浏览器半边）
 ├── cordis.patch.yml      # DSH 服务注入：id: gen3d
 ├── tsconfig.json         # host 半边（node）
