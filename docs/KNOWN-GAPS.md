@@ -1,8 +1,10 @@
 # 已知能力缺口（dsh-gen3d）
 
-> 状态：🟡 快照（2026-08-24，与 `src/` 代码现状对齐；§10 为 2026-08-20 实测解决记录，
+> 状态：🟡 快照（2026-08-25，与 `src/` 代码现状对齐；§10 为 2026-08-20 实测解决记录，
 > §11–§12 为 2026-08-24 与 DSH 0.1.1-rc.2 环境对齐时新增，§13 为 2026-08-24 视口预览与
-> 交互视窗落地时新增，§14 为 2026-08-24 真实 API 全链 E2E 后新增）。本文件逐条记录当前实现的
+> 交互视窗落地时新增，§14 为 2026-08-24 真实 API 全链 E2E 后新增（2026-08-25 meshy 路由
+> 修复），§15–§16 为 2026-08-25 修复后复跑全链时由会话内 agent 实证发现）。
+> 本文件逐条记录当前实现的
 > 已知能力缺口：**影响**（用户/链路会看到什么）、**规避方式**（当前可行路径）、
 > **后续计划**（补齐方向）。凡标注「待补」的条目，补齐后须同步删除或改写对应
 > 小节，并把状态翻绿。
@@ -249,7 +251,22 @@ CLI 用户由工具回报预览文件路径打开查看。
 **后续计划**：评估软光栅内近似**贴图采样**（当前无纹理过滤）；评估 **headless-gl / GPU
 渲染路线**（真实 PBR 观感 + 性能），作为后续可选升级。
 
-## 14. provider 网络层无瞬态重试（代理 fake-IP 环境会杀死进行中任务）
+## 14. ~~provider 网络层无瞬态重试（代理 fake-IP 环境会杀死进行中任务）~~（🔶 meshy 路由已修复，2026-08-25；其余三家待跟进）
+
+**修复记录（2026-08-25，第二次真实 E2E 后落地）**：同一环境再次完整复现并放大——
+refine 结果取回连续 3 次 `fetch failed`（云端 3 个 SUCCEEDED 任务全作废、30 积分），
+remesh 取回亦失败 1 次；Node fetch 实测单请求延迟抖动 5.7–10.4s。已在
+`src/providers/meshy.ts` 落地有界瞬态重试：幂等 GET（轮询 / 余额 / 资产下载，
+**body 读取纳入重试单元**——大文件下载中途中断与连接失败同等重试）对网络类失败与
+408/429/5xx 按 1.5s→3s→6s→12s 指数退避共 5 次尝试（`IDEMPOTENT_RETRY_*` /
+`RETRYABLE_STATUSES`）；abort 不重试。POST 提交**不重试**（盲重试可能重复建单），
+改为失败消息附防重复计费指引；取回侧最终失败的消息附任务 id 与「用 originalTaskId
+接回成果」恢复指引（错误消息经工具层 `toToolFailure` 原样透传给 agent）。
+单测 +6（`src/providers/meshy.test.ts`「传输重试」），445 全绿。
+**未覆盖（仍开放）**：hunyuan3d / tripo3d / rodin 三家同款重试未做；POST 提交的
+「先查任务列表去重再决定重发」恢复未做；Retry-After 头未消费（与 #9 一并）。
+
+—— 以下为修复前的原始记录（保留作背景）——
 
 **现状**：四家 provider 的 HTTP 调用（创建 / 轮询 / 下载）均为单次尝试；网络层瞬断
 （TLS 握手失败、`fetch failed`、连接重置）直接以 `provider_http_error`
@@ -271,3 +288,41 @@ rig→motion）任一环节瞬断都会「烧钱不交付」；重试只能由�
 一带）实现**有界瞬态重试**：GET / 轮询 / 下载类安全请求指数退避重试（≤4 次）；
 POST 创建类仅在可判定「请求未发出」（TLS 前段 / 连接阶段错误）时重试 1 次，
 避免重复建单双重计费；Retry-After 头优先（与 #9 轮询退避一并设计）。
+
+## 15. 软渲染预览对蒙皮 / 金属材质资产失真（方向倒置 + 黑屏 / 空图）
+
+**现象（2026-08-25 修复后复跑全链，preview 产物实证）**：
+`orange-fox-bot-lowpoly-contact.png` 中角色整体**倒置**（头朝下）且不采样贴图
+（白模）；`orange-fox-bot-lowpoly.rigged_model-contact.png` 几乎全黑空图。
+
+**根因（会话内 agent 实证推断，证据：diagnostics/ 轮廓 / 贴图 / Lambert 渲染对照）**：
+① 软渲染器只取 `baseColorFactor` 不采样贴图，Meshy 烘焙导出材质 metallic=1 时
+漫反射归零 → 黑屏；② 蒙皮资产的 mesh 挂在 0.01 缩放的 Armature 节点下，渲染器
+无蒙皮 / 骨骼变换支持，实际绘制的是 ~1.7cm 微缩物体 + 固定俯视相机 → 空图；
+③ clay 渲染方向倒置疑与 Armature 变换 / 相机 up 向量处理有关（未完全定位）。
+
+**影响**：CLI / headless 侧的 `gen3d_render_preview` 对绑骨后资产不可用、对蒙皮
+资产观感错误；web 会话「3D 资产」视窗（three.js）不受影响。
+
+**规避**：用 web 视窗查看最终效果；或对未蒙皮的基础资产出预览。
+
+**后续计划**：软渲染器渲染前按绑定姿态（或首帧姿态）烘焙顶点位置、支持贴图
+采样、修正方向；或评估 preview 改走 three.js headless（node-canvas / headless-gl
+成本需评估）。
+
+## 16. playable export 合并阶段 `motion_read_failed: Invalid glTF 2.0 binary`
+
+**现象（2026-08-25 真实环境复跑）**：`gen3d_export_playable_character` 在服务端
+合并阶段抛 `motion_read_failed: Invalid glTF 2.0 binary`；同字节 GLB 用本地
+gltf-transform NodeIO 逐个解析全部正常，重试同错。profile 安装副本与仓库 `lib/`
+完全一致（`diff -rq` 无差异）。
+
+**定位线索（会话内 agent 实证）**：merge 路径使用
+`io.setVertexLayout(VertexLayout.SEPARATE)`，错误在该路径抛出；疑与 SEPARATE 布局
+下蒙皮属性（JOINTS/WEIGHTS）处理有关，未完全定位。
+
+**影响**：官方 export 通道在真实环境不可用；`gen3d_adopt_playable_character`
+（adopt 路径）产出等价交付物（merged.glb + playable.json），本次交付即走该路径。
+
+**后续计划**：在真实宿主环境最小复现（同字节 GLB + 服务端 merge 路径），定位
+VertexLayout.SEPARATE 下的具体抛错点；修复后删除本条目。
