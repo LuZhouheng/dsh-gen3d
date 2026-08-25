@@ -21,7 +21,7 @@ description: 从一句需求或一张参考图生成一个带贴图、游戏可�
 3. **生成后自检**：`gen3d_inspect_asset` 对照预算档（面数 / 贴图 / 材质三科）→ `gen3d_render_preview` 渲染检查（web 会话「3D 资产」页签可交互查看，CLI 用户拿预览文件路径）→ `gen3d_score_quality` 跑客观五维（geometry / topology / texture / pbr / prompt_fidelity），判断要不要重生成或换 provider。
 4. **命名 + 交付**：`gen3d_rename_asset` 给清晰显示名（只改显示名不动磁盘），把静态角色的资产路径回报给用户。
 5. **交付时主动补一句（必做）**：告诉用户「这个角色现在是静态的；想让它**会动**（走 / 跑 / 挥手）我可以帮它绑骨 + 加动作，但要花一点配额——需要就说一声」。
-6. **仅当用户明确要会动**（仅人形 `characters` 槽）：`gen3d_auto_rig` 绑骨（保贴图、置位 `readiness.rigged`）→ `gen3d_list_motions`（按 `query`/`category`/`rigType` 收窄）挑动作 → `gen3d_apply_motion`（一次一个动作，按动作幂等）。
+6. **仅当用户明确要会动**（仅人形 `characters` 槽）：`gen3d_auto_rig` 绑骨（保贴图、置位 `readiness.rigged`）→ `gen3d_list_motions`（按 `query`/`category`/`rigType` 收窄）挑动作 → `gen3d_apply_motion`（一次一个动作，按动作幂等）。套完动作后让 web 用户去会话「3D 资产」页签播放验证（0.3.0 起视窗支持动画播放 / 切换 clip）。
 
 ## Examples
 

@@ -10,6 +10,11 @@ DeepSeek Harness（DSH）的 **3D 角色生成插件**：把一句需求 / 一�
 dsh plugin --profile web add dsh-gen3d
 ```
 
+> **新版本发布后的数小时内**，profile 侧 pnpm 的发布冷却机制（minimumReleaseAge）
+> 可能把最新版排除在解析外——bare `add dsh-gen3d` 会回落到旧版（2026-08-25 实证：
+> 0.2.0 发布当口装到了 0.1.0）。显式 `dsh plugin --profile web add dsh-gen3d@latest`
+> 或指定版本号绕过。
+
 > **git 安装（不推荐，仅备用）**：`dsh plugin --profile web add github:LuZhouheng/dsh-gen3d`。
 > git 安装拉的是源码（`lib/` 不进 Git），包内已备自包含 `prepare` 脚本
 > （`tsc -p tsconfig.build.json`，跨平台、无 shell 依赖）在安装时自动构建；

@@ -238,7 +238,8 @@ KNOWN-GAPS #10 的 rc.8 实测方式一致）。
 **现状**：`gen3d_render_preview` 的预览图由纯 JS 软光栅渲染（Solid / Workbench 视口级
 观感）：着色 / 光照 / 地面 / 阴影齐全，但**无 PBR 贴图采样、无 SSAO、无 IBL**（环境光遮蔽
 与基于图像的照明不模拟）；交互视窗（实时查看）经 `conversation.view` 槽注入，**仅 web
-会话可见**。
+会话可见**（0.3.0 起该视窗已升级：IBL 环境光 + ACES 色调映射 + 动画播放 / 切换 clip +
+图片内联预览，见 `src/client/viewer/`；软渲染预览对蒙皮 / 金属资产的失真另见 §15）。
 
 **影响**：预览用于形态 / 比例 / 朝向 / 布光自检可信，但**不能代表引擎内最终渲染效果**
 （贴图细节、AO 与反射缺失，材质科以 `gen3d_inspect_asset` 指标为准）；headless / CLI

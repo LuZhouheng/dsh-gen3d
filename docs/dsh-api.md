@@ -659,6 +659,8 @@ dsh --profile demo
    - **遗留观察**：remesh 目标面数与产出有官方口径内偏差（30k→55k）；hero 预算档剩 2 条违规（55k 面 / 4096 贴图）属如实标注；代理 fake-IP 环境建议给 `api.meshy.ai` 配直连或稳定出口（profile 副本打 fetch 重试补丁实测可根治，仓库侧方案见 KNOWN-GAPS §14）。
    - 清理：临时 profile / tarball / 服务进程全部清除；`~/.dsh/.env`（用户 key）、既有 profile 与设置未动；产物与截图存 `/tmp`（不入仓库）。
 
+9. **2026-08-25 修复后复跑真实全链（0.3.0 验证）**：registry 安装路径实证——bare `add dsh-gen3d` 在 0.2.0 发布当口因 pnpm 发布冷却（minimumReleaseAge）回落装到 **0.1.0**（其 dependencies 带宿主服务包，会触发条目 6 的双实例漂移），显式 `dsh-gen3d@0.2.0` 解决，README 已加安装注记。**§14 缺口放大复现**：refine 取回连续 3 次 `fetch failed`（云端 3 个 SUCCEEDED 作废、30 积分），remesh 取回失败 1 次；Node fetch 实测到 `api.meshy.ai` 延迟抖动 5.7–10.4s。修复（幂等 GET 重试 + body 纳入重试单元 + 防重复计费指引，见 KNOWN-GAPS §14）后同环境复跑：retopo ×2 → rig → walk/run（免费）→ jump 全链**一次取回成功**，交付 `merged.glb`（26,550 面 / 3 clips / 2048 贴图 / 材质修复）+ `playable.json`，本段计费 18 积分。两个新缺口由会话内 agent 实证并登记：KNOWN-GAPS §15（软渲染蒙皮 / 金属失真）、§16（export 合并 `motion_read_failed`，adopt 路径等价绕过）。web 视窗验收（0.3.0 升级）：IBL + ACES 下带贴图模型观感正常、动画自动播放与 clip 切换在位、图片资产内联预览。另实证：会话进行中权限模式下拉框对后台注入点击不响应（仅欢迎屏可切换）——web 自动化驱动的注意点。
+
 ---
 
 ## 9. dsh-gen3d 落地要点（结论清单）
