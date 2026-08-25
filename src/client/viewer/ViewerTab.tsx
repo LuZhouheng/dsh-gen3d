@@ -21,6 +21,8 @@ import {
   formatFaceCount,
   groupSlots,
   normalizeAssetsResponse,
+  pluginsFileUrl,
+  previewKindOf,
   type ViewerAsset,
 } from './viewer-models.js';
 
@@ -48,6 +50,8 @@ const styles: Record<string, CSSProperties> = {
   itemActive: { background: '#2b3138' },
   itemHint: { color: '#6c7683', fontSize: 11 },
   viewport: { flex: 1, minWidth: 0 },
+  imagePane: { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0f1216', overflow: 'auto', padding: 16 },
+  imageFit: { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' },
   status: { display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', padding: '10px 12px', color: '#8a93a0', fontSize: 12 },
   button: { padding: '3px 10px', fontSize: 12, cursor: 'pointer', background: '#242931', color: '#d7dce2', border: '1px solid #3a414b', borderRadius: 6 },
 };
@@ -57,6 +61,7 @@ export function ViewerTab(_props: ViewerTabProps) {
   const [reloadToken, setReloadToken] = useState(0);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [triangles, setTriangles] = useState<number | null>(null);
+  const [clipCount, setClipCount] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -84,6 +89,8 @@ export function ViewerTab(_props: ViewerTabProps) {
     () => (list.status === 'ready' ? list.assets.find((a) => a.assetPath === selectedPath) ?? null : null),
     [list, selectedPath],
   );
+  /** 选中项的预览形态：图片直出 <img>，模型 / 其他走 WebGL 视口（视口自带解析错误态）。 */
+  const selectedKind = selectedPath === null ? null : previewKindOf(selectedPath);
   const groups = useMemo(
     () => (list.status === 'ready' ? groupSlots(list.assets) : []),
     [list],
@@ -91,6 +98,7 @@ export function ViewerTab(_props: ViewerTabProps) {
 
   const onStats = useCallback<NonNullable<AssetViewportProps['onStats']>>((stats) => {
     setTriangles(stats.triangles);
+    setClipCount(stats.clips ?? 0);
   }, []);
 
   return (
@@ -101,6 +109,7 @@ export function ViewerTab(_props: ViewerTabProps) {
           <span style={styles.fact}>
             {selectedAsset.name}
             {triangles !== null && triangles > 0 ? ` · ${formatFaceCount(triangles)} 面` : ''}
+            {clipCount > 0 ? ` · ${clipCount} 动画` : ''}
           </span>
         )}
         <span style={styles.hint}>
@@ -145,11 +154,21 @@ export function ViewerTab(_props: ViewerTabProps) {
           ))}
         </div>
         <div style={styles.viewport}>
-          <AssetViewport
-            assetPath={selectedPath}
-            assetName={selectedAsset?.name ?? ''}
-            onStats={onStats}
-          />
+          {selectedKind === 'image' && selectedPath !== null ? (
+            <div style={styles.imagePane}>
+              <img
+                src={pluginsFileUrl(selectedPath)}
+                alt={selectedAsset?.name ?? selectedPath}
+                style={styles.imageFit}
+              />
+            </div>
+          ) : (
+            <AssetViewport
+              assetPath={selectedPath}
+              assetName={selectedAsset?.name ?? ''}
+              onStats={onStats}
+            />
+          )}
         </div>
       </div>
     </div>

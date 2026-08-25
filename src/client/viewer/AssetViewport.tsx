@@ -1,20 +1,25 @@
 // 3D 资产 WebGL 视口 —— 纯 three.js 命令式场景（React 只做挂载容器与状态回调）。
 //
 // 职责：/plugins/dsh-gen3d/files/<path> 拉 GLB → GLTFLoader 解析 → 场景搭建
-// （深色背景 + 网格地面 + 半球光 + 方向光阴影）→ 自动 fit 相机（OrbitControls
-// 轨道/缩放）→ 面数统计上报。GLB 不可解析（如 mock 占位字节）时显示错误态，
-// 可点「重新加载」。组件卸载时释放 renderer / 几何 / 材质 / controls。
+// （深色背景 + 网格地面 + IBL 环境光照 + 方向光阴影 + ACES 色调映射）→ 自动 fit
+// 相机（OrbitControls 轨道/缩放）→ 面数/动画统计上报；GLB 带动画 clips 时建立
+// AnimationMixer 自动播放第一条，左下角控制条支持 播放/暂停/切 clip。
+// GLB 不可解析（如 mock 占位字节）时显示错误态，可点「重新加载」。组件卸载时释放
+// renderer / 几何 / 材质 / controls / mixer / 环境贴图。
 //
-// 三个要点：
+// 要点：
 // - 场景建立只跑一次（挂载 effect），资产切换只换模型节点，不重建场景；
 // - 加载是异步竞态：资产切换后旧响应作废（generation 令牌守卫）；
-// - 阴影贴图打开（2048²）；模型遍历统一 castShadow/receiveShadow。
+// - 阴影贴图打开（2048²）；模型遍历统一 castShadow/receiveShadow；
+// - 渲染观感（2026-08-25 用户实证「渲染效果不足」）：RoomEnvironment PMREM 提供
+//   IBL——metallic=1 的 PBR 材质（Meshy 烘焙导出常态）不再死黑，有反射层次。
 
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 import { pluginsFileUrl } from './viewer-models.js';
 
@@ -23,6 +28,8 @@ export interface AssetViewportStats {
   triangles: number;
   /** 场景中可见网格节点数。 */
   meshes: number;
+  /** GLB 动画 clip 数（无动画为 0）。 */
+  clips: number;
 }
 
 export interface AssetViewportProps {
@@ -77,6 +84,15 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
   // 加载代际：切资产 / 重试时 +1，旧回调凭代际作废（防迟到旧响应覆盖新模型）。
   const generationRef = useRef(0);
 
+  // 动画：clips 由加载成功回调装配；actions 放 ref（React 状态只驱动 播放/暂停/切换）。
+  const [clips, setClips] = useState<readonly { name: string; duration: number }[]>([]);
+  const [activeClip, setActiveClip] = useState(0);
+  const [playing, setPlaying] = useState(true);
+  const animRef = useRef<{ mixer: THREE.AnimationMixer | null; actions: THREE.AnimationAction[] }>({
+    mixer: null,
+    actions: [],
+  });
+
   // 场景本体（跨渲染常驻；卸载时整体销毁）。
   const sceneRef = useRef<{
     renderer: THREE.WebGLRenderer;
@@ -85,6 +101,7 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
     controls: OrbitControls;
     modelHost: THREE.Group;
     light: THREE.DirectionalLight;
+    clock: THREE.Clock;
   } | null>(null);
 
   useEffect(() => {
@@ -94,10 +111,19 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // 现代视窗观感：sRGB 输出 + ACES 色调映射（r152+ 前者本为默认，显式声明）
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
     host.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(SCENE_BG);
+    // IBL 环境光：RoomEnvironment → PMREM。metallic=1 的 PBR 材质（Meshy 烘焙导出
+    // 常态）有反射底色不再死黑；半球光相应降档（环境光已由 IBL 承担大半）。
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = environment;
 
     const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 10000);
     camera.position.set(2.4, 2, 2.8);
@@ -123,7 +149,7 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
     ground.receiveShadow = true;
     scene.add(ground);
 
-    const hemisphere = new THREE.HemisphereLight(0xf2f5f9, 0x3b3f47, 1.15);
+    const hemisphere = new THREE.HemisphereLight(0xf2f5f9, 0x3b3f47, 0.55);
     scene.add(hemisphere);
 
     const light = new THREE.DirectionalLight(0xffffff, 2.4);
@@ -138,6 +164,9 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
     const modelHost = new THREE.Group();
     scene.add(modelHost);
 
+    // 动画时钟：渲染循环取 delta 驱动 mixer（无动画时 mixer 为 null，开销为零）。
+    const clock = new THREE.Clock();
+
     const updateSize = () => {
       const width = Math.max(1, host.clientWidth);
       const height = Math.max(1, host.clientHeight);
@@ -150,21 +179,26 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
     resizeObserver.observe(host);
 
     const renderLoop = () => {
+      const delta = clock.getDelta();
+      animRef.current.mixer?.update(delta);
       controls.update();
       renderer.render(scene, camera);
     };
     renderer.setAnimationLoop(renderLoop);
 
-    sceneRef.current = { renderer, scene, camera, controls, modelHost, light };
+    sceneRef.current = { renderer, scene, camera, controls, modelHost, light, clock };
 
     return () => {
       renderer.setAnimationLoop(null);
       resizeObserver.disconnect();
+      animRef.current.mixer?.stopAllAction();
       disposeScene(modelHost);
       grid.geometry.dispose();
       (grid.material as THREE.Material).dispose();
       ground.geometry.dispose();
       (ground.material as THREE.Material).dispose();
+      environment.dispose();
+      pmrem.dispose();
       controls.dispose();
       renderer.dispose();
       if (renderer.domElement.parentElement === host) host.removeChild(renderer.domElement);
@@ -180,6 +214,8 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
     ctx.modelHost.clear();
     setLoadState(assetPath === null ? 'idle' : 'loading');
     setErrorText(null);
+    setClips([]);
+    setActiveClip(0);
     if (assetPath === null) return;
 
     const url = pluginsFileUrl(assetPath);
@@ -222,9 +258,26 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
         ctx.light.shadow.camera.near = 0.1;
         ctx.light.shadow.camera.far = maxDim * 12;
         ctx.light.shadow.camera.updateProjectionMatrix();
+        // 动画：GLB 带 clips 时建立 mixer 并自动播放第一条（蒙皮资产 three 原生支持；
+        // 用户交互由 [activeClip, playing, clips] effect 接管）。
+        const animations = gltf.animations ?? [];
+        if (animations.length > 0) {
+          const mixer = new THREE.AnimationMixer(model);
+          const actions = animations.map((clip) => mixer.clipAction(clip));
+          animRef.current = { mixer, actions };
+          actions[0]!.reset().play();
+          setClips(animations.map((clip, index) => ({
+            name: clip.name !== '' ? clip.name : `clip-${index + 1}`,
+            duration: clip.duration,
+          })));
+          setActiveClip(0);
+          setPlaying(true);
+        } else {
+          animRef.current = { mixer: null, actions: [] };
+        }
         setLoadState('ready');
         const stats = countTriangles(model);
-        onStats?.({ triangles: stats.triangles, meshes: stats.meshes });
+        onStats?.({ triangles: stats.triangles, meshes: stats.meshes, clips: animations.length });
       },
       undefined,
       (error) => {
@@ -237,11 +290,26 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
     return () => {
       // 依赖变化：清理旧模型（下一次 effect 会重建加载状态）。
       if (sceneRef.current === ctx) {
+        animRef.current.mixer?.stopAllAction();
+        animRef.current = { mixer: null, actions: [] };
         disposeScene(ctx.modelHost);
         ctx.modelHost.clear();
       }
     };
   }, [assetPath, reloadToken, onStats]);
+
+  // 动画控制：切 clip / 播放暂停。actions 由加载成功回调装配；clips 入依赖使装配后
+  // 即便 activeClip/playing 未变也会同步一次（覆盖「上个资产也停在第 0 条」的情形）。
+  useEffect(() => {
+    animRef.current.actions.forEach((action, index) => {
+      if (index !== activeClip) {
+        action.stop();
+        return;
+      }
+      if (!action.isRunning()) action.reset().play();
+      action.paused = !playing;
+    });
+  }, [activeClip, playing, clips]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
@@ -265,6 +333,25 @@ export function AssetViewport({ assetPath, assetName, onStats }: AssetViewportPr
           )}
         </div>
       )}
+      {clips.length > 0 && (
+        <div style={animBarStyle}>
+          <button type="button" style={animButtonStyle} onClick={() => setPlaying((p) => !p)}>
+            {playing ? '⏸ 暂停' : '▶ 播放'}
+          </button>
+          <select
+            value={activeClip}
+            onChange={(event) => { setActiveClip(Number(event.target.value)); setPlaying(true); }}
+            style={animSelectStyle}
+            aria-label="动画片段"
+          >
+            {clips.map((clip, index) => (
+              <option key={`${clip.name}-${index}`} value={index}>
+                {clip.name}（{clip.duration.toFixed(1)}s）
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
     </div>
   );
 }
@@ -280,4 +367,38 @@ const overlayStyle: CSSProperties = {
   fontSize: 13,
   textAlign: 'center',
   pointerEvents: 'none',
+};
+
+const animBarStyle: CSSProperties = {
+  position: 'absolute',
+  left: 12,
+  bottom: 12,
+  display: 'flex',
+  gap: 8,
+  alignItems: 'center',
+  padding: '6px 8px',
+  background: 'rgba(20, 23, 28, 0.85)',
+  border: '1px solid #2a3038',
+  borderRadius: 8,
+  backdropFilter: 'blur(4px)',
+};
+
+const animButtonStyle: CSSProperties = {
+  padding: '3px 10px',
+  fontSize: 12,
+  cursor: 'pointer',
+  background: '#242931',
+  color: '#d7dce2',
+  border: '1px solid #3a414b',
+  borderRadius: 6,
+};
+
+const animSelectStyle: CSSProperties = {
+  fontSize: 12,
+  background: '#242931',
+  color: '#d7dce2',
+  border: '1px solid #3a414b',
+  borderRadius: 6,
+  padding: '3px 6px',
+  maxWidth: 260,
 };

@@ -105,7 +105,7 @@ export HUNYUAN3D_API_KEY="xxxxxxxx"
 | 工具 | 说明 |
 | --- | --- |
 | `gen3d_inspect_asset` | 资产体检：对照预算档（hero-character / prop / environment）检查面数、贴图、材质三科 |
-| `gen3d_render_preview` | 视口预览：纯 JS 软渲染出 PNG/GIF 预览并落盘；web 会话「3D 资产」页签可交互查看 |
+| `gen3d_render_preview` | 视口预览：纯 JS 软渲染出 PNG/GIF 预览并落盘；web 会话「3D 资产」页签可交互查看（three.js：IBL 环境光照 + ACES 色调映射 + 阴影；带动画资产自动播放、可暂停/切 clip；png/jpg 等图片资产直接内联预览） |
 
 一句话产线：**生成 → 评分 → 命名 →（要会动才）绑骨 → 套动作 → 导出**；静态优先、会动 opt-in（按次计费）。注：legacy 的 `pose-standardization`（A/T-pose 标准化）**暂缓未迁移**——官方无独立等价 API，详见[已知缺口](#已知缺口)。
 

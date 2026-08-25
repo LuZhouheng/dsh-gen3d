@@ -127,6 +127,19 @@ export function pluginsFileUrl(path: string): string {
   return `/plugins/dsh-gen3d/files/${path.split('/').map(encodeURIComponent).join('/')}`;
 }
 
+/** 预览形态：GLB/glTF 模型 → WebGL 视口；常见图片 → <img> 直出；其余按模型尝试（视口自带错误态）。 */
+export type PreviewKind = 'model' | 'image' | 'other';
+
+const IMAGE_EXTS: ReadonlySet<string> = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
+
+/** 由扩展名判定预览形态（2026-08-25 用户实证：点图片资产打到 WebGL 错误态，体验断裂）。 */
+export function previewKindOf(assetPath: string): PreviewKind {
+  const ext = assetPath.split('.').pop()?.toLowerCase() ?? '';
+  if (ext === 'glb' || ext === 'gltf') return 'model';
+  if (IMAGE_EXTS.has(ext)) return 'image';
+  return 'other';
+}
+
 /** 字节数人类可读（KiB/MiB，保留 1 位）。 */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

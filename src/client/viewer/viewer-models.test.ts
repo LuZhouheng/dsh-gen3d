@@ -7,6 +7,7 @@ import {
   groupSlots,
   normalizeAssetsResponse,
   pluginsFileUrl,
+  previewKindOf,
   viewerAssetName,
 } from './viewer-models.js';
 
@@ -89,6 +90,23 @@ describe('pluginsFileUrl', () => {
   it('路径分段 encode，保留 / 分隔', () => {
     expect(pluginsFileUrl('assets/3d/characters/hero 角色.glb'))
       .toBe('/plugins/dsh-gen3d/files/assets/3d/characters/hero%20%E8%A7%92%E8%89%B2.glb');
+  });
+});
+
+describe('previewKindOf', () => {
+  it('GLB/glTF → model；大小写不敏感', () => {
+    expect(previewKindOf('assets/3d/characters/hero.glb')).toBe('model');
+    expect(previewKindOf('a/b/c.GLB')).toBe('model');
+    expect(previewKindOf('a/b/scene.gltf')).toBe('model');
+  });
+  it('常见图片 → image', () => {
+    for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'PNG']) {
+      expect(previewKindOf(`assets/3d/characters/hero-thumb.${ext}`)).toBe('image');
+    }
+  });
+  it('fbx / 无扩展名 / 未知 → other（走模型视口的错误态）', () => {
+    expect(previewKindOf('assets/3d/characters/hero.rigged_model.fbx')).toBe('other');
+    expect(previewKindOf('noext')).toBe('other');
   });
 });
 
